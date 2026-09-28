@@ -2,8 +2,17 @@ from fastapi import APIRouter, Depends, Request, Query, Header
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.middleware.tenant_context import TenantContext, get_current_tenant_context
-from app.modules.tickets.schemas import TicketCreate, TicketUpdate, TicketMessageCreate
+from app.middleware.tenant_context import (
+    TenantContext,
+    get_current_tenant_context,
+    get_widget_or_tenant_context,
+)
+from app.modules.tickets.schemas import (
+    TicketCreate,
+    TicketUpdate,
+    TicketMessageCreate,
+    TicketActionPayload,
+)
 from app.modules.tickets.service import TicketService
 
 router = APIRouter(prefix="/api/v1/tickets", tags=["Customer Support Tickets"])
@@ -14,7 +23,7 @@ async def create_ticket(
     payload: TicketCreate,
     request: Request,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_create")
@@ -36,6 +45,8 @@ async def create_ticket(
             "status": ticket.status,
             "priority": ticket.priority,
             "subject": ticket.subject,
+            "description": ticket.description,
+            "ai_summary": ticket.ai_summary,
             "created_at": ticket.created_at.isoformat(),
         },
         "error": None,
@@ -47,8 +58,8 @@ async def create_ticket(
 async def list_tickets(
     request: Request,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=50),
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    page_size: int = Query(50, ge=1, le=100),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_list")
@@ -63,8 +74,11 @@ async def list_tickets(
                 {
                     "ticket_id": t.id,
                     "subject": t.subject,
+                    "description": t.description,
                     "status": t.status,
                     "priority": t.priority,
+                    "user_id": t.user_id,
+                    "ai_summary": t.ai_summary or {},
                     "created_at": t.created_at.isoformat(),
                     "updated_at": t.updated_at.isoformat(),
                 }
@@ -80,7 +94,7 @@ async def list_tickets(
 async def get_ticket(
     ticket_id: str,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_get")
@@ -94,7 +108,8 @@ async def get_ticket(
             "description": ticket.description,
             "status": ticket.status,
             "priority": ticket.priority,
-            "ai_summary": ticket.ai_summary,
+            "user_id": ticket.user_id,
+            "ai_summary": ticket.ai_summary or {},
             "created_at": ticket.created_at.isoformat(),
             "updated_at": ticket.updated_at.isoformat(),
         },
@@ -108,7 +123,7 @@ async def update_ticket(
     ticket_id: str,
     payload: TicketUpdate,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_patch")
@@ -126,17 +141,41 @@ async def update_ticket(
     }
 
 
+@router.post("/{ticket_id}/action", response_model=dict, summary="Update status and add engineer reply")
+async def ticket_action(
+    ticket_id: str,
+    payload: TicketActionPayload,
+    request: Request,
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
+    db: AsyncSession = Depends(get_db),
+):
+    request_id = getattr(request.state, "request_id", "req_ticket_action")
+    service = TicketService(db)
+    ticket = await service.update_status_and_reply(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        ticket_id=ticket_id,
+        status=payload.status,
+        engineer_reply=payload.reply,
+    )
+    return {
+        "success": True,
+        "data": {"ticket_id": ticket.id, "status": ticket.status},
+        "error": None,
+        "request_id": request_id,
+    }
+
+
 @router.get("/{ticket_id}/messages", response_model=dict, summary="List customer-visible ticket messages")
 async def list_ticket_messages(
     ticket_id: str,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_msgs")
     service = TicketService(db)
     ticket = await service.get_authorized_ticket(tenant_id=ctx.tenant_id, user_id=ctx.user_id, ticket_id=ticket_id)
-    # Filter out staff internal notes (Architecture Section 112)
     visible_msgs = [m for m in ticket.messages if not m.is_internal]
     return {
         "success": True,
@@ -163,7 +202,7 @@ async def add_ticket_message(
     ticket_id: str,
     payload: TicketMessageCreate,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_msg_add")
@@ -183,7 +222,7 @@ async def add_ticket_message(
 async def close_ticket(
     ticket_id: str,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_close")
@@ -201,7 +240,7 @@ async def close_ticket(
 async def reopen_ticket(
     ticket_id: str,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_reopen")
@@ -213,4 +252,3 @@ async def reopen_ticket(
         "error": None,
         "request_id": request_id,
     }
-

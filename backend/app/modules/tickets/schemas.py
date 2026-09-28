@@ -19,6 +19,11 @@ class TicketMessageCreate(BaseModel):
     message: str = Field(..., min_length=1)
 
 
+class TicketActionPayload(BaseModel):
+    status: str
+    reply: Optional[str] = None
+
+
 class TicketResponse(BaseModel):
     id: str
     tenant_id: str
