@@ -59,15 +59,17 @@ class ChatService:
         user_meta: Optional[Dict[str, Optional[str]]] = None,
     ) -> Dict[str, Any]:
         # 1. Resolve or create conversation
+               
+        conv = None
         if conversation_id:
             stmt = select(Conversation).where(
                 Conversation.id == conversation_id, Conversation.tenant_id == ctx.tenant_id
             )
             res = await self.db.execute(stmt)
             conv = res.scalar_one_or_none()
-            if not conv:
-                raise NotFoundException("Conversation not found")
-        else:
+
+        # Agar conversation_id nahi aayi ya purani ID DB me nahi mili, toh gracefully nayi conversation bana lo
+        if not conv:
             conv = Conversation(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
