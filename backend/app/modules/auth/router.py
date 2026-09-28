@@ -11,6 +11,7 @@ from app.modules.auth.schemas import (
 from app.modules.auth.service import AuthService
 from app.middleware.tenant_context import TenantContext, get_current_tenant_context
 from app.models.user import User
+from app.models.tenant import Tenant
 from pydantic import BaseModel
 from app.core.config import settings
 from app.core.security import create_access_token
@@ -37,13 +38,20 @@ async def admin_login(
     ):
         raise UnauthorizedException("Invalid administrator email or password")
 
-    res = await db.execute(select(Tenant).order_by(Tenant.created_at).limit(1))
-    default_tenant = res.scalar_one_or_none()
-    tenant_id = str(default_tenant.id) if default_tenant else "3733647b-374b-404a-8dc8-382b7de1abd3"
+    tenant_id = "3733647b-374b-404a-8dc8-382b7de1abd3"
+    user_id = "1e336198-e0dc-4ede-bf84-20165e022c67"
+    try:
+        res = await db.execute(select(Tenant).order_by(Tenant.created_at).limit(1))
+        default_tenant = res.scalar_one_or_none()
+        if default_tenant:
+            tenant_id = str(default_tenant.id)
 
-    user_res = await db.execute(select(User).where(User.tenant_id == tenant_id).limit(1))
-    default_user = user_res.scalar_one_or_none()
-    user_id = str(default_user.id) if default_user else "1e336198-e0dc-4ede-bf84-20165e022c67"
+        user_res = await db.execute(select(User).where(User.tenant_id == tenant_id).limit(1))
+        default_user = user_res.scalar_one_or_none()
+        if default_user:
+            user_id = str(default_user.id)
+    except Exception:
+        pass
 
     token = create_access_token(
         subject=user_id,
