@@ -79,6 +79,10 @@ async def list_tickets(
                     "priority": t.priority,
                     "user_id": t.user_id,
                     "ai_summary": t.ai_summary or {},
+                    "engineer_reply": next(
+                        (m.message for m in reversed(t.messages) if m.sender_type in ("AGENT", "SUPPORT") and not m.is_internal),
+                        None,
+                    ),
                     "created_at": t.created_at.isoformat(),
                     "updated_at": t.updated_at.isoformat(),
                 }
@@ -110,6 +114,10 @@ async def get_ticket(
             "priority": ticket.priority,
             "user_id": ticket.user_id,
             "ai_summary": ticket.ai_summary or {},
+            "engineer_reply": next(
+                (m.message for m in reversed(ticket.messages) if m.sender_type in ("AGENT", "SUPPORT") and not m.is_internal),
+                None,
+            ),
             "created_at": ticket.created_at.isoformat(),
             "updated_at": ticket.updated_at.isoformat(),
         },

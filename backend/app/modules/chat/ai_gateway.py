@@ -445,16 +445,72 @@ class AIGateway:
                 f"• {chunk.get('title', 'Guide')}: {chunk.get('content', '')}" for chunk in knowledge_context
             )
 
-        # 2. Check Support Ticket / Escalation Intent (Multilingual Corporate Intake)
-        is_ticket_intent = bool(
-            re.search(
-                r"\b(ticket|support\s+ticket|complaint|escalate|issue\s+raise|raise\s+a?\s*ticket|log\s+a?\s*ticket)\b|(?:टिकट|शिकायत|सपोर्ट\s*टिकट|ટિકિટ)",
+        # 1.5 Check Support Ticket Status / Tracking Intent
+        ticket_id_match = re.search(r"CB-\d{8}-[A-Za-z0-9]{4}", last_user_message, re.IGNORECASE)
+        is_check_ticket_intent = bool(
+            ticket_id_match
+            or re.search(
+                r"\b(status|track|check|kya hua|update|solve hua|progress|state|closed|resolved|स्टेटस|चेक|अपडेट|सॉल्व)\b.*?\b(ticket|tickets|issue|complaint|शिकायत|टिकट)\b|\b(ticket|tickets|issue|complaint|शिकायत|टिकट)\b.*?\b(status|track|check|kya hua|update|solve hua|progress|state|closed|resolved|स्टेटस|चेक|अपडेट|सॉल्व)\b|\b(mera ticket|my ticket|pichla ticket|ticket ka kya hua)\b",
                 last_msg_lower,
                 re.IGNORECASE,
             )
         )
 
         slot_missing_reply = None
+
+        if is_check_ticket_intent and db is not None:
+            from app.models.ticket import SupportTicket
+            from sqlalchemy import select, desc
+            from sqlalchemy.orm import selectinload
+
+            clean_tid = ticket_id_match.group(0).upper() if ticket_id_match else None
+            stmt = select(SupportTicket).options(selectinload(SupportTicket.messages)).order_by(desc(SupportTicket.created_at))
+            if clean_tid:
+                stmt = stmt.where(SupportTicket.id.ilike(f"%{clean_tid}%"))
+            else:
+                stmt = stmt.limit(5)
+
+            res = await db.execute(stmt)
+            matched_tickets = res.scalars().all()
+
+            if matched_tickets:
+                matched = matched_tickets[0]
+                agent_msgs = [m for m in matched.messages if m.sender_type in ("AGENT", "SUPPORT") and not m.is_internal]
+                latest_reply = agent_msgs[-1].message if agent_msgs else None
+
+                ticket_info = {
+                    "ticket_id": matched.id,
+                    "subject": matched.subject,
+                    "status": matched.status,
+                    "priority": matched.priority,
+                    "description": matched.description,
+                    "created_at": matched.created_at.isoformat(),
+                    "updated_at": matched.updated_at.isoformat() if matched.updated_at else None,
+                    "resolved_at": matched.resolved_at.isoformat() if matched.resolved_at else None,
+                    "engineer_reply": latest_reply,
+                    "department": (matched.ai_summary or {}).get("department", "L2 Connector Engineering"),
+                    "sla_tier": (matched.ai_summary or {}).get("sla_tier", "P3 - Standard"),
+                    "resolution_sla": (matched.ai_summary or {}).get("resolution_sla", "Within 4 Hours"),
+                    "diagnostics": (matched.ai_summary or {}).get("diagnostics", {}),
+                    "company": (matched.ai_summary or {}).get("company", active_company),
+                }
+                executed_tools.append({"tool": "check_support_ticket_status", "result": ticket_info})
+                tool_results_text += f"\n[Ticket Status Lookup]: ID={matched.id}, Status={matched.status}, Latest Reply='{latest_reply or 'No engineer notes yet'}'"
+            else:
+                slot_missing_reply = (
+                    f"Mujhe **{active_company}** ke liye koi matching support ticket nahi mila"
+                    + (f" (Ticket #{clean_tid})" if clean_tid else "")
+                    + ".\n\nAgar aapka koi issue pending hai ya naya ticket raise karna hai, toh boliye main abhi naya ticket bana deta hoon!"
+                )
+
+        # 2. Check Support Ticket / Escalation Intent (Multilingual Corporate Intake)
+        is_ticket_intent = (not is_check_ticket_intent) and bool(
+            re.search(
+                r"\b(ticket|support\s+ticket|complaint|escalate|issue\s+raise|raise\s+a?\s*ticket|log\s+a?\s*ticket|bana do ticket|create ticket)\b|(?:टिकट|शिकायत|सपोर्ट\s*टिकट|ટિકિટ)",
+                last_msg_lower,
+                re.IGNORECASE,
+            )
+        )
 
         if is_ticket_intent and db is not None:
             from app.modules.tickets.service import TicketService
@@ -1099,12 +1155,54 @@ class AIGateway:
         if slot_missing_reply:
             reply = slot_missing_reply
         else:
+            status_tool = next((t for t in executed_tools if t["tool"] == "check_support_ticket_status"), None)
             ticket_tool = next((t for t in executed_tools if t["tool"] == "create_support_ticket"), None)
             voucher_tool = next(
                 (t for t in executed_tools if t["tool"] in ("create_sales_invoice_command", "create_receipt_voucher_command")),
                 None,
             )
-            if ticket_tool:
+            if status_tool:
+                s_res = status_tool["result"]
+                s_id = s_res.get("ticket_id")
+                s_subj = s_res.get("subject", "Support Request")
+                s_status = s_res.get("status", "OPEN")
+                s_reply = s_res.get("engineer_reply")
+                s_sla = s_res.get("resolution_sla", "Within 4 Hours")
+
+                if s_status == "RESOLVED":
+                    reply = (
+                        f"🎉 Aapka support ticket **`#{s_id}`** successfully **RESOLVED** ho chuka hai!\n\n"
+                        f"• **Subject:** {s_subj}\n"
+                        f"• **Live Status:** ✅ RESOLVED\n"
+                    )
+                    if s_reply:
+                        reply += f"• 💬 **Support Engineer ka Samadhaan/Reply:**\n  *\"{s_reply}\"*\n\n"
+                    reply += "Aap neeche card se **Download PDF** par click karke updated PDF receipt bhi le sakte hain."
+                elif s_status == "IN_PROGRESS":
+                    reply = (
+                        f"⏳ Aapka ticket **`#{s_id}`** abhi **IN PROGRESS** hai!\n\n"
+                        f"• **Subject:** {s_subj}\n"
+                        f"• **Live Status:** 🟡 IN PROGRESS\n"
+                        f"• **Target Resolution SLA:** {s_sla}\n"
+                    )
+                    if s_reply:
+                        reply += f"• 💬 **Latest Engineer Update:** *\"{s_reply}\"*\n\n"
+                    reply += "Humare L2 engineers ispar kaam kar rahe hain. Jald hi update milega!"
+                elif s_status == "CLOSED":
+                    reply = (
+                        f"Aapka ticket **`#{s_id}`** abhi **CLOSED** status par hai.\n\n"
+                        f"• **Subject:** {s_subj}\n"
+                    )
+                    if s_reply:
+                        reply += f"• 💬 **Resolution Summary:** *\"{s_reply}\"*\n\n"
+                else:
+                    reply = (
+                        f"Aapka ticket **`#{s_id}`** queue me **OPEN** hai aur engineer desk ko assign kiya ja chuka hai.\n\n"
+                        f"• **Subject:** {s_subj}\n"
+                        f"• **Live Status:** 📩 OPEN\n"
+                        f"• **Target Resolution:** {s_sla}"
+                    )
+            elif ticket_tool:
                 t_res = ticket_tool["result"]
                 t_id = t_res.get("ticket_id")
                 t_subj = t_res.get("subject", "Support Request")
