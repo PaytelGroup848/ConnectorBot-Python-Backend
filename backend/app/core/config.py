@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "super_secret_jwt_key_connector_ai_2026_xyz987"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    ADMIN_EMAIL: str = "admin@ctrlbooks.com"
+    ADMIN_PASSWORD: str = "CtrlBooks@2026!Admin"
 
     # LLM Gateway
     AI_GATEWAY_BASE_URL: str = "https://api.mistral.ai/v1"

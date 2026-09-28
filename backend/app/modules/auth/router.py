@@ -11,10 +11,61 @@ from app.modules.auth.schemas import (
 from app.modules.auth.service import AuthService
 from app.middleware.tenant_context import TenantContext, get_current_tenant_context
 from app.models.user import User
-from app.models.tenant import Tenant
-from app.core.exceptions import NotFoundException
+from pydantic import BaseModel
+from app.core.config import settings
+from app.core.security import create_access_token
+from app.core.exceptions import NotFoundException, UnauthorizedException
 
 router = APIRouter(prefix="/api/v1", tags=["Authentication & Session"])
+
+
+class AdminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/auth/admin-login", response_model=dict, summary="Authenticate Admin Console operator")
+async def admin_login(
+    payload: AdminLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    request_id = getattr(request.state, "request_id", "req_admin_login")
+    if (
+        payload.email.strip().lower() != settings.ADMIN_EMAIL.strip().lower()
+        or payload.password != settings.ADMIN_PASSWORD
+    ):
+        raise UnauthorizedException("Invalid administrator email or password")
+
+    res = await db.execute(select(Tenant).order_by(Tenant.created_at).limit(1))
+    default_tenant = res.scalar_one_or_none()
+    tenant_id = str(default_tenant.id) if default_tenant else "3733647b-374b-404a-8dc8-382b7de1abd3"
+
+    user_res = await db.execute(select(User).where(User.tenant_id == tenant_id).limit(1))
+    default_user = user_res.scalar_one_or_none()
+    user_id = str(default_user.id) if default_user else "1e336198-e0dc-4ede-bf84-20165e022c67"
+
+    token = create_access_token(
+        subject=user_id,
+        tenant_id=tenant_id,
+        role="ADMIN",
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "token": token,
+            "user": {
+                "id": user_id,
+                "email": settings.ADMIN_EMAIL,
+                "name": "CtrlBooks System Administrator",
+                "role": "ADMIN",
+                "tenant_id": tenant_id,
+            },
+        },
+        "error": None,
+        "request_id": request_id,
+    }
 
 
 @router.post("/session/exchange", response_model=dict, summary="Exchange Connector token for AI session")
