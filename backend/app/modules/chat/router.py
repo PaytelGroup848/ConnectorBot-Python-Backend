@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.middleware.tenant_context import TenantContext, get_current_tenant_context
+from app.middleware.tenant_context import TenantContext, get_widget_or_tenant_context
 from app.middleware.rate_limiter import chat_limiter
 from app.modules.chat.schemas import (
     ChatRequest,
@@ -20,7 +21,8 @@ router = APIRouter(prefix="/api/v1/chat", tags=["Chat & Streaming"])
 async def chat_completion(
     payload: ChatRequest,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    #ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
     _ = Depends(chat_limiter),
 ):
@@ -52,7 +54,8 @@ async def chat_completion(
 async def chat_stream(
     payload: ChatRequest,
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    #ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
     _ = Depends(chat_limiter),
 ):

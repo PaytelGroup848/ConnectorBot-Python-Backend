@@ -1,5 +1,7 @@
 from typing import Optional, List
 from fastapi import Request, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.core.exceptions import UnauthorizedException, ForbiddenException
@@ -51,6 +53,36 @@ async def get_current_tenant_context(
             )
         raise UnauthorizedException("Valid authentication token required")
     return context
+
+async def get_widget_or_tenant_context(
+    request: Request,
+    context: Optional[TenantContext] = Depends(get_optional_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> TenantContext:
+    """Dynamically resolves real user or falls back to the database's active primary organization."""
+    # 1. Agar logged-in user ka valid token mila, toh wahi use karo
+    if context:
+        return context
+
+    # 2. Agar token nahi hai, toh database se dynamically active tenant fetch karo (No Hardcoding)
+    from sqlalchemy import select
+    from app.models.tenant import Tenant
+    from app.models.user import User
+
+    res = await db.execute(select(Tenant).order_by(Tenant.created_at).limit(1))
+    default_tenant = res.scalar_one_or_none()
+    
+    tenant_id = str(default_tenant.id) if default_tenant else "default-tenant"
+
+    user_res = await db.execute(select(User).where(User.tenant_id == tenant_id).limit(1))
+    default_user = user_res.scalar_one_or_none()
+    user_id = str(default_user.id) if default_user else "default-user"
+
+    return TenantContext(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role="GUEST",
+    )
 
 
 def require_roles(allowed_roles: List[str]):
