@@ -153,6 +153,26 @@ async def list_companies(
     return {"success": True, "data": companies, "error": None, "request_id": request_id}
 
 
+@router.get("/companies/{company_id}/ledgers", response_model=dict, summary="Get Tally ledgers with pagination and search")
+async def get_company_ledgers(
+    company_id: str,
+    request: Request,
+    page: int = 1,
+    limit: int = 50,
+    q: Optional[str] = None,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_ledgers")
+    ledgers_data = await connector_client.get_company_ledgers(
+        company_id=company_id,
+        page=page,
+        limit=limit,
+        q=q,
+    )
+    return {"success": True, "data": ledgers_data, "error": None, "request_id": request_id}
+
+
+
 @router.get("/dashboard/metrics", response_model=dict, summary="Get CtrlBooks financial KPIs and recent activity")
 async def get_dashboard_metrics(company_name: Optional[str] = None, request: Request = None):
     request_id = getattr(request.state, "request_id", "req_metrics") if request else "req_metrics"
