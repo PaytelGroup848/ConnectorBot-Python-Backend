@@ -143,6 +143,36 @@ async def check_tally_status(
     }
 
 
+@router.get("/connectors/status", response_model=dict, summary="Get centralized cloud connector device status and lastSync telemetry")
+async def get_cloud_connector_status(
+    request: Request,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_cloud_conn_status")
+    status = await connector_client.get_cloud_connector_status()
+    return {
+        "success": status.get("success", True),
+        "data": status,
+        "error": None if status.get("success") else status.get("message"),
+        "request_id": request_id,
+    }
+
+
+@router.get("/subscriptions/me", response_model=dict, summary="Get active subscription, plan details, validity, and seat allocation")
+async def get_my_subscription(
+    request: Request,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_subscription_me")
+    sub = await connector_client.get_my_subscription()
+    return {
+        "success": sub.get("success", True),
+        "data": sub,
+        "error": None if sub.get("success") else sub.get("message"),
+        "request_id": request_id,
+    }
+
+
 @router.get("/companies", response_model=dict, summary="Get list of available Tally companies")
 async def list_companies(
     request: Request,

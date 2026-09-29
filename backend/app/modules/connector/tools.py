@@ -22,6 +22,27 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_connector_status_command",
+            "description": "Fetches centralized cloud connector telemetry, registered device status, and lastSync progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Optional company name filter"}
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_subscription_status_command",
+            "description": "Fetches active SaaS subscription details, plan name, validity dates, total seats, and active features.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_my_sync_status",
             "description": "Checks the current and last sync progress, synced records count, and status for a Tally company.",
             "parameters": {
@@ -585,6 +606,26 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
             user_email=args.get("user_email"),
             preferred_port=args.get("tally_port"),
         )
+    elif tool_name == "get_connector_status_command":
+        token = args.get("connector_token") or args.get("token")
+        cloud_status = await connector_client.get_cloud_connector_status(token=token)
+        local_status = await connector_client.get_connection_status(
+            company_name=args.get("company_name"),
+            user_email=args.get("user_email"),
+            preferred_port=args.get("tally_port"),
+        )
+        return {
+            "success": True,
+            "company_name": args.get("company_name", "CtrlBooks"),
+            "cloud_status": cloud_status,
+            "local_status": local_status,
+            "latest_device": cloud_status.get("latest_connector"),
+            "last_sync": cloud_status.get("last_sync"),
+            "total_devices": cloud_status.get("total_connectors", 0),
+        }
+    elif tool_name == "get_subscription_status_command":
+        token = args.get("connector_token") or args.get("token")
+        return await connector_client.get_my_subscription(token=token)
     elif tool_name == "get_my_sync_status":
         return await connector_client.get_sync_status(args.get("company_name"))
     elif tool_name == "get_my_sync_errors":

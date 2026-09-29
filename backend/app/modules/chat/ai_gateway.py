@@ -14,6 +14,7 @@ from app.modules.chat.handlers.reports_handler import handle_accounting_reports
 from app.modules.chat.handlers.sales_handler import handle_sales_analytics, handle_voucher_lookup
 from app.modules.chat.handlers.cash_bank_handler import handle_cash_bank
 from app.modules.chat.handlers.party_handler import handle_parties
+from app.modules.chat.handlers.connector_status_handler import handle_connector_status_and_subscription
 
 logger = logging.getLogger("connector_ai.ai_gateway")
 
@@ -488,19 +489,21 @@ class AIGateway:
         is_ticket_intent = handled_ticket
 
 
-        # 3. Check Live Connection Status Intent (Multilingual keywords)
-        if any(w in last_msg_lower for w in ["connect", "online", "status", "chal raha", "offline", "स्टेटस", "कनेक्ट", "ऑनलाइन", "સ્ટેટસ"]):
-            status_data = await execute_tool(
-                "get_my_connection_status",
-                {
-                    "company_name": active_company,
-                    "user_email": caller["email"],
-                    "tally_port": caller["tally_port"],
-                },
-                ctx,
-            )
-            executed_tools.append({"tool": "get_my_connection_status", "result": status_data})
-            tool_results_text += f"\n[Live Status]: Tally Online={status_data.get('is_online')}, Port={status_data.get('tally_port')}, Source={status_data.get('detection_source')}, Agent Version={status_data.get('agent_version')}"
+        # 3. Check Live Connection Status & Subscription Intent (Multilingual)
+        handled_status_sub, ss_tools, ss_text, ss_reply = await handle_connector_status_and_subscription(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=False,
+        )
+        if handled_status_sub:
+            executed_tools.extend(ss_tools)
+            tool_results_text += ss_text
+            if ss_reply:
+                slot_missing_reply = ss_reply
 
         # 4. Dynamic Voucher Intent & Slot Filling (Sales, Receipt, Payment, Purchase, Notes, Contra, Journal)
         handled_voucher, v_tools, v_text, v_reply = await handle_voucher_creation(
@@ -644,7 +647,17 @@ class AIGateway:
         has_action_card = bool(
             slot_missing_reply
             or any(
-                t["tool"] in ("create_support_ticket", "create_sales_invoice_command", "create_receipt_voucher_command", "get_sales_analytics_command", "get_accounting_report_command")
+                t["tool"] in (
+                    "create_support_ticket",
+                    "create_sales_invoice_command",
+                    "create_receipt_voucher_command",
+                    "get_sales_analytics_command",
+                    "get_accounting_report_command",
+                    "get_cash_bank_command",
+                    "get_parties_command",
+                    "get_connector_status_command",
+                    "get_subscription_status_command",
+                )
                 for t in executed_tools
             )
         )

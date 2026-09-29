@@ -202,8 +202,32 @@ async def run_modular_chat_tests():
     assert any(t["tool"] == "get_parties_command" for t in res_p.get("tool_calls", []))
     print("  [PASS] 12. AIGateway Parties Intent Routing verified")
 
+    # 13. Test Connector Status & Subscription Handler
+    from app.modules.chat.handlers.connector_status_handler import handle_connector_status_and_subscription
+    handled_cs, tools_cs, _, reply_cs = await handle_connector_status_and_subscription(
+        last_user_message="mere connector ki status batao",
+        last_msg_lower="mere connector ki status batao",
+        caller=caller,
+        active_company="Annai Agency - 2022-2023",
+        lang_code="hinglish",
+    )
+    assert handled_cs is True
+    assert tools_cs[0]["tool"] == "get_connector_status_command"
+    assert tools_cs[0]["result"]["cloud_status"]["success"] is True
+    print("  [PASS] 13. Live Connector Status Handler verified")
+
+    # 14. Test Subscription Status in AIGateway
+    res_sub = await gateway.generate_response(
+        messages=[{"role": "user", "content": "mera subscription status batao"}],
+        ctx=ctx,
+        company_name="Annai Agency - 2022-2023",
+        user_meta=caller,
+    )
+    assert any(t["tool"] == "get_subscription_status_command" for t in res_sub.get("tool_calls", []))
+    print("  [PASS] 14. AIGateway Subscription Intent Routing verified")
+
     print("=" * 60)
-    print(" ALL MODULAR REFACTORING, CASH/BANK & PARTIES TESTS PASSED SUCCESSFULLY!")
+    print(" ALL MODULAR REFACTORING, CASH/BANK, PARTIES & CONNECTOR STATUS TESTS PASSED!")
     print("=" * 60 + "\n")
 
 

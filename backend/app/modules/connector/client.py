@@ -225,20 +225,29 @@ class ConnectorClient:
             "last_heartbeat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
 
-    async def get_sync_status(self, company_name: Optional[str] = None) -> Dict[str, Any]:
+    async def get_sync_status(self, company_name: Optional[str] = None, token: Optional[str] = None) -> Dict[str, Any]:
         """Fetch synchronization progress, last sync time, and records count."""
         try:
             from app.modules.connector.commands import command_queue_service
             queued_count = len(command_queue_service.list_queued_commands())
         except Exception:
             queued_count = 0
+
+        cloud_info = await self.get_cloud_connector_status(token=token)
+        last_sync = cloud_info.get("last_sync") or {}
+
+        status = last_sync.get("status") or "COMPLETED"
+        last_sync_time = last_sync.get("completed_at") or last_sync.get("started_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()
+
         return {
             "company_name": company_name or "My Company",
-            "status": "COMPLETED",
-            "last_sync_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "status": status,
+            "last_sync_time": last_sync_time,
+            "last_sync": last_sync,
             "total_records": queued_count,
             "synced_records": queued_count,
             "failed_records": 0,
+            "cloud_status": cloud_info,
         }
 
     async def get_sync_errors(self, company_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1705,6 +1714,123 @@ class ConnectorClient:
         except Exception as e:
             return {"pushed_to_local_tally": False, "tally_port": live_port, "status": "QUEUED", "error": str(e)}
 
+    async def get_cloud_connector_status(self, token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Fetches live cloud connector telemetry from GET /connectors/status.
+        Returns registered connector devices, heartbeat timestamps, and lastSync details.
+        """
+        active_token = token or settings.CONNECTOR_API_TOKEN
+        res = await self._request("GET", "/connectors/status", token=active_token)
+        if not res.get("success") or not res.get("data"):
+            return {
+                "success": False,
+                "connectors": [],
+                "last_sync": None,
+                "latest_connector": None,
+                "total_connectors": 0,
+                "message": res.get("message", "No connector status available"),
+            }
+
+        data = res.get("data", {})
+        raw_conns = data.get("connectors", [])
+        last_sync = data.get("lastSync", {})
+
+        clean_connectors = []
+        for c in raw_conns:
+            clean_connectors.append({
+                "id": str(c.get("id") or ""),
+                "device_id": str(c.get("deviceId") or ""),
+                "device_name": str(c.get("deviceName") or "Unknown Device"),
+                "status": str(c.get("status") or "OFFLINE"),
+                "last_heartbeat": str(c.get("lastHeartbeatAt") or ""),
+                "tally_connected": bool(c.get("tallyConnected", False)),
+                "connector_version": str(c.get("connectorVersion") or "1.0.0"),
+            })
+
+        clean_connectors.sort(key=lambda x: x.get("last_heartbeat") or "", reverse=True)
+        latest_connector = clean_connectors[0] if clean_connectors else None
+
+        duration_sec = None
+        if last_sync and last_sync.get("startedAt") and last_sync.get("completedAt"):
+            try:
+                st = datetime.datetime.fromisoformat(last_sync["startedAt"].replace("Z", "+00:00"))
+                et = datetime.datetime.fromisoformat(last_sync["completedAt"].replace("Z", "+00:00"))
+                duration_sec = round((et - st).total_seconds(), 1)
+            except Exception:
+                duration_sec = None
+
+        clean_last_sync = None
+        if last_sync:
+            clean_last_sync = {
+                "id": str(last_sync.get("id") or ""),
+                "type": str(last_sync.get("type") or "SYNC"),
+                "status": str(last_sync.get("status") or "UNKNOWN"),
+                "started_at": str(last_sync.get("startedAt") or ""),
+                "completed_at": str(last_sync.get("completedAt") or ""),
+                "company_id": str(last_sync.get("companyId") or ""),
+                "duration_seconds": duration_sec,
+            }
+
+        return {
+            "success": True,
+            "total_connectors": len(clean_connectors),
+            "latest_connector": latest_connector,
+            "last_sync": clean_last_sync,
+            "connectors": clean_connectors[:8],
+        }
+
+    async def get_my_subscription(self, token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Fetches active subscription details from GET /subscriptions/me.
+        Returns plan name, active status, validity range, seats limit, and enabled features.
+        """
+        active_token = token or settings.CONNECTOR_API_TOKEN
+        res = await self._request("GET", "/subscriptions/me", token=active_token)
+        if not res.get("success") or not res.get("data"):
+            return {
+                "success": False,
+                "subscription": None,
+                "message": res.get("message", "Subscription details not found"),
+            }
+
+        data = res.get("data", {})
+        sub = data.get("subscription", {})
+        plan = sub.get("plan", {})
+
+        from_date = str(sub.get("fromDate") or "")
+        to_date = str(sub.get("toDate") or "")
+
+        days_remaining = None
+        if to_date:
+            try:
+                target_date = datetime.datetime.fromisoformat(to_date.replace("Z", "+00:00"))
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                delta = target_date - now_utc
+                days_remaining = max(0, delta.days)
+            except Exception:
+                days_remaining = None
+
+        seat_limit = int(plan.get("seatLimit") or 1)
+        extra_seats = int(sub.get("extraSeats") or 0)
+        total_seats = seat_limit + extra_seats
+
+        return {
+            "success": True,
+            "id": str(sub.get("id") or ""),
+            "status": str(sub.get("status") or "ACTIVE"),
+            "is_active": bool(sub.get("active", True)),
+            "plan_name": str(plan.get("name") or "Pro"),
+            "plan_id": str(plan.get("id") or ""),
+            "features": plan.get("features") or [],
+            "seat_limit": seat_limit,
+            "extra_seats": extra_seats,
+            "total_seats": total_seats,
+            "from_date": from_date,
+            "to_date": to_date,
+            "days_remaining": days_remaining,
+        }
+
 
 connector_client = ConnectorClient()
+
 
