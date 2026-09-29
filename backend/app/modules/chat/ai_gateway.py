@@ -832,8 +832,155 @@ class AIGateway:
 
                 tool_results_text += f"\n[Voucher Queued]: Type={v_type}, ID={voucher_data.get('voucher_number')}, Company={effective_company}, Party={party}, Amount={amt}"
 
+        # 4a. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
+        # Matches queries like: "mere aaj ka sales batao", "today's sales", "aaj kitni sale hui", "is mahine ka sales", "aaj ka collection batao"
+        has_specific_vnum = bool(re.search(r"(?:invoice|voucher|bill|inv)\s*(?:no\.?|num\.?|#)\s*[A-Za-z0-9\-_]+", last_user_message, re.IGNORECASE)) and not bool(re.search(r"\b(total|aaj|today|kitna|kitni|kitne|summary|report)\b", last_msg_lower))
+        is_sales_analytics_intent = (not is_ticket_intent) and (not is_voucher_intent) and (not has_specific_vnum) and bool(
+            re.search(
+                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
+                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?)\b|"
+                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?)\b|"
+                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट)",
+                last_msg_lower,
+                re.IGNORECASE,
+            )
+        )
+
+        if is_sales_analytics_intent:
+            effective_company = active_company
+            effective_company_id = caller.get("company_id")
+
+            # Determine endpoint and module label
+            if any(w in last_msg_lower for w in ["credit note", "credit notes", "creditnote", "sales return", "क्रेडिट नोट"]):
+                target_module = "credit-notes"
+                module_name = "Credit Note"
+            elif any(w in last_msg_lower for w in ["receipt", "receipts", "collection", "jama", "payment", "रसीद"]):
+                target_module = "receipts"
+                module_name = "Receipt"
+            elif any(w in last_msg_lower for w in ["sales order", "sales orders", "salesorder", "order", "orders", "ऑर्डर"]):
+                target_module = "sales-orders"
+                module_name = "Sales Order"
+            else:
+                target_module = "sales"
+                module_name = "Sales"
+
+            # Determine date range
+            today_obj = datetime.date.today()
+            today_iso = today_obj.isoformat()
+            if any(w in last_msg_lower for w in ["kal", "yesterday", "pichla din"]):
+                y_obj = today_obj - datetime.timedelta(days=1)
+                from_date = y_obj.isoformat()
+                to_date = y_obj.isoformat()
+                period_label = f"Kal ({y_obj.strftime('%d %b %Y')})"
+            elif any(w in last_msg_lower for w in ["is mahine", "this month", "current month"]):
+                first_day = today_obj.replace(day=1).isoformat()
+                from_date = first_day
+                to_date = today_iso
+                period_label = f"Is Mahine ({today_obj.strftime('%B %Y')})"
+            elif any(w in last_msg_lower for w in ["pichle hafte", "last week", "7 din", "7 days"]):
+                week_ago = (today_obj - datetime.timedelta(days=7)).isoformat()
+                from_date = week_ago
+                to_date = today_iso
+                period_label = "Pichle 7 Din (Last 7 Days)"
+            else:
+                # Default to today
+                from_date = today_iso
+                to_date = today_iso
+                period_label = f"Aaj ({today_obj.strftime('%d %b %Y')})"
+
+            # Extract search query q if user specified a party name or voucher query
+            search_q = None
+            q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:sales|sale|receipt|collection|order|credit)", last_user_message, re.IGNORECASE)
+            if q_match:
+                cand_q = q_match.group(1).strip()
+                cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
+                if len(cand_q) >= 2 and cand_q.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "aaj", "total"}:
+                    search_q = cand_q
+
+            # Company details resolution
+            comp_details = await connector_client.resolve_company_details(
+                company_name=effective_company,
+                company_id=effective_company_id,
+                token=caller.get("connector_token"),
+            )
+            effective_company = comp_details.get("company_name", effective_company)
+            effective_company_id = comp_details.get("company_id", effective_company_id)
+
+            # Query the target module
+            analytics_data = await connector_client.get_company_sales_module(
+                endpoint_suffix=target_module,
+                company_name=effective_company,
+                company_id=effective_company_id,
+                q=search_q,
+                from_date=from_date,
+                to_date=to_date,
+                page=1,
+                limit=20,
+                token=caller.get("connector_token"),
+            )
+            analytics_data["period_label"] = period_label
+
+            executed_tools.append({"tool": "get_sales_analytics_command", "result": analytics_data})
+            tot_amt = analytics_data.get("total_amount", 0.0)
+            tot_cnt = analytics_data.get("total_count", 0)
+            items_list = analytics_data.get("items", [])
+            tool_results_text += f"\n[Sales Analytics]: Company={effective_company}, Module={module_name}, Period={period_label}, TotalAmount={tot_amt}, TotalCount={tot_cnt}"
+
+            # Format natural language corporate response
+            if tot_cnt > 0 or tot_amt > 0:
+                top_items_txt = ""
+                for itm in items_list[:3]:
+                    top_items_txt += f"  • `{itm.get('voucher_number', 'VCH')}` — **{itm.get('party_ledger', 'Customer')}**: ₹{itm.get('amount', 0):,.2f}\n"
+
+                if lang_code == "en-IN":
+                    slot_missing_reply = (
+                        f"📊 **{effective_company} — {period_label} {module_name} Report:**\n\n"
+                        f"• **Total {module_name} Value:** **₹{tot_amt:,.2f}**\n"
+                        f"• **Total Count:** **{tot_cnt}** {module_name.lower()}(s)\n"
+                        f"• **Period Range:** {from_date} to {to_date}\n\n"
+                    )
+                    if top_items_txt:
+                        slot_missing_reply += f"**Key Transactions:**\n{top_items_txt}\n"
+                    slot_missing_reply += "The interactive financial summary card has been loaded below with instant WhatsApp sharing!"
+                elif lang_code == "hi-IN":
+                    slot_missing_reply = (
+                        f"📊 **{effective_company} — {period_label} {module_name} रिपोर्ट:**\n\n"
+                        f"• **कुल राशि (Total Amount):** **₹{tot_amt:,.2f}**\n"
+                        f"• **कुल वाउचर/बिल संख्या:** **{tot_cnt}**\n"
+                        f"• **तारीख सीमा:** {from_date} से {to_date}\n\n"
+                    )
+                    if top_items_txt:
+                        slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_items_txt}\n"
+                    slot_missing_reply += "नीचे लाइव समरी कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
+                else:
+                    slot_missing_reply = (
+                        f"📊 **{effective_company}** ka **{period_label}** ka **{module_name}** summary mil gaya hai:\n\n"
+                        f"• **Kul Bikri / Total Amount:** **₹{tot_amt:,.2f}**\n"
+                        f"• **Total Vouchers / Invoices:** **{tot_cnt}**\n"
+                        f"• **Date Period:** {from_date} se {to_date}\n\n"
+                    )
+                    if top_items_txt:
+                        slot_missing_reply += f"**Top Transactions:**\n{top_items_txt}\n"
+                    slot_missing_reply += "Aapke liye interactive live summary card niche ready hai, jise aap direct WhatsApp par share kar sakte hain!"
+            else:
+                if lang_code == "en-IN":
+                    slot_missing_reply = (
+                        f"ℹ️ In **{effective_company}**, no {module_name.lower()} records were found for **{period_label}** (Total: ₹0.00).\n\n"
+                        f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime? (e.g. *'Create sales invoice for {sample_party} of ₹15,000'*)"
+                    )
+                elif lang_code == "hi-IN":
+                    slot_missing_reply = (
+                        f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई {module_name.lower()} रिकॉर्ड नहीं मिला (कुल: ₹0.00)।\n\n"
+                        f"क्या आप नया वाउचर बनाना चाहते हैं? (जैसे: *'{sample_party} के लिए 15,000 का सेल्स इनवॉइस बना दो'*)"
+                    )
+                else:
+                    slot_missing_reply = (
+                        f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
+                        f"Agar aapko naya voucher banana hai, toh boliye main abhi Tally me post kar deta hoon! (e.g. *'{sample_party} ke liye 15,000 ka sales invoice bana do'*)"
+                    )
+
         # 4b. Dynamic View/Lookup Voucher Intent (Fetches synced invoices/vouchers from Cloud/Tally)
-        is_view_voucher_intent = (not is_ticket_intent) and (not is_voucher_intent) and bool(
+        is_view_voucher_intent = (not is_ticket_intent) and (not is_voucher_intent) and (not is_sales_analytics_intent) and bool(
             re.search(
                 r"\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous|kya\s+hai)\b.*?\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b|"
                 r"\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b.*?\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous)\b|"
@@ -1155,13 +1302,27 @@ class AIGateway:
         if slot_missing_reply:
             reply = slot_missing_reply
         else:
+            analytics_tool = next((t for t in executed_tools if t["tool"] == "get_sales_analytics_command"), None)
             status_tool = next((t for t in executed_tools if t["tool"] == "check_support_ticket_status"), None)
             ticket_tool = next((t for t in executed_tools if t["tool"] == "create_support_ticket"), None)
             voucher_tool = next(
                 (t for t in executed_tools if t["tool"] in ("create_sales_invoice_command", "create_receipt_voucher_command")),
                 None,
             )
-            if status_tool:
+            if analytics_tool:
+                a_res = analytics_tool["result"]
+                tot_amt = a_res.get("total_amount", 0.0)
+                tot_cnt = a_res.get("total_count", 0)
+                mod_name = a_res.get("module_label", "Sales")
+                period = a_res.get("period_label", "Aaj")
+                reply = (
+                    f"📊 **{a_res.get('company_name', active_company)} — {period} {mod_name} Report:**\n\n"
+                    f"• **Total {mod_name} Value:** **₹{tot_amt:,.2f}**\n"
+                    f"• **Total Count:** **{tot_cnt}** {mod_name.lower()}(s)\n"
+                    f"• **Period Range:** {a_res.get('from_date')} to {a_res.get('to_date')}\n\n"
+                    f"Aapke liye interactive live summary card niche load kar diya gaya hai!"
+                )
+            elif status_tool:
                 s_res = status_tool["result"]
                 s_id = s_res.get("ticket_id")
                 s_subj = s_res.get("subject", "Support Request")
