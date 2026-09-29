@@ -12,6 +12,7 @@ from app.modules.chat.handlers.ticket_handler import handle_ticket_status_check,
 from app.modules.chat.handlers.voucher_handler import handle_voucher_creation
 from app.modules.chat.handlers.reports_handler import handle_accounting_reports
 from app.modules.chat.handlers.sales_handler import handle_sales_analytics, handle_voucher_lookup
+from app.modules.chat.handlers.cash_bank_handler import handle_cash_bank
 
 logger = logging.getLogger("connector_ai.ai_gateway")
 
@@ -522,7 +523,25 @@ class AIGateway:
         is_voucher_intent = handled_voucher
 
 
-        # 4a. Dynamic Official Accounting Reports Intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
+        # 4a. Dynamic Cash & Bank Module Intent (Cash in hand, Bank Accounts, Liquid Funds)
+        handled_cash_bank, cb_tools, cb_text, cb_reply = await handle_cash_bank(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+        )
+        if handled_cash_bank:
+            executed_tools.extend(cb_tools)
+            tool_results_text += cb_text
+            if cb_reply:
+                slot_missing_reply = cb_reply
+        is_cash_bank_intent = handled_cash_bank
+
+
+        # 4b. Dynamic Official Accounting Reports Intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
         handled_reports, r_tools, r_text, r_reply = await handle_accounting_reports(
             last_user_message=last_user_message,
             last_msg_lower=last_msg_lower,
@@ -531,6 +550,7 @@ class AIGateway:
             lang_code=lang_code,
             is_ticket_intent=is_ticket_intent,
             is_voucher_intent=is_voucher_intent,
+            is_cash_bank_intent=is_cash_bank_intent,
         )
         if handled_reports:
             executed_tools.extend(r_tools)
@@ -540,7 +560,7 @@ class AIGateway:
         is_accounting_reports_intent = handled_reports
 
 
-        # 4b. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
+        # 4c. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
         handled_sales, s_tools, s_text, s_reply = await handle_sales_analytics(
             last_user_message=last_user_message,
             last_msg_lower=last_msg_lower,
@@ -551,6 +571,7 @@ class AIGateway:
             is_ticket_intent=is_ticket_intent,
             is_voucher_intent=is_voucher_intent,
             is_accounting_reports_intent=is_accounting_reports_intent,
+            is_cash_bank_intent=is_cash_bank_intent,
         )
         if handled_sales:
             executed_tools.extend(s_tools)
@@ -570,6 +591,7 @@ class AIGateway:
             is_ticket_intent=is_ticket_intent,
             is_voucher_intent=is_voucher_intent,
             is_sales_analytics_intent=is_sales_analytics_intent,
+            is_cash_bank_intent=is_cash_bank_intent,
         )
         if handled_vlookup:
             executed_tools.extend(vl_tools)

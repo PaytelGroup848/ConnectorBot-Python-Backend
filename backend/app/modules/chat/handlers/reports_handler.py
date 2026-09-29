@@ -14,8 +14,12 @@ async def handle_accounting_reports(
     lang_code: str,
     is_ticket_intent: bool,
     is_voucher_intent: bool,
+    is_cash_bank_intent: bool = False,
 ) -> Tuple[bool, List[Dict[str, Any]], str, Optional[str]]:
     """Handles accounting reports intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)."""
+    if is_ticket_intent or is_voucher_intent or is_cash_bank_intent:
+        return False, [], "", None
+
     is_explicit_reports_keyword = bool(
         re.search(
             r"\b(day\s*book|daybook|trial\s*balance|trail\s*balance|profit\s*(?:and|&)\s*loss|pnl|p&l|balance\s*sheet|voucher\s*lines?|line\s*items?)\b|"
@@ -35,11 +39,7 @@ async def handle_accounting_reports(
         )
     ) and not bool(re.search(r"\b(sales?|bikri|orders?|credit\s*notes?)\b", last_msg_lower))
 
-    is_accounting_reports_intent = (
-        (not is_ticket_intent)
-        and (not is_voucher_intent)
-        and (is_explicit_reports_keyword or is_general_reports_request)
-    )
+    is_accounting_reports_intent = is_explicit_reports_keyword or is_general_reports_request
 
     if not is_accounting_reports_intent:
         return False, [], "", None

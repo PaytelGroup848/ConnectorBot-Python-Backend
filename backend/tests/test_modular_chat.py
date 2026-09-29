@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.middleware.tenant_context import TenantContext
+from app.core.config import settings
 from app.modules.chat.ai_gateway import (
     AIGateway,
     normalize_indian_numerals,
@@ -39,8 +40,8 @@ async def run_modular_chat_tests():
         "email": "test@example.com",
         "phone": "9876543210",
         "tally_port": 9000,
-        "company_id": "test-comp-123",
-        "connector_token": "mock-token",
+        "company_id": "6aa0f659f858467a84d08d57",
+        "connector_token": getattr(settings, "CONNECTOR_API_TOKEN", "") or "mock-token",
     }
 
     handled, tools, tool_text, reply = await handle_accounting_reports(
@@ -108,7 +109,50 @@ async def run_modular_chat_tests():
     assert "Customer / Party Name" in reply_v
     print("  [PASS] 5. Voucher Slot Filling Handler verified")
 
-    # 6. Test AIGateway Full Orchestration
+    # 6. Test Cash & Bank Module Handler
+    from app.modules.chat.handlers.cash_bank_handler import handle_cash_bank
+    handled_cb, tools_cb, _, reply_cb = await handle_cash_bank(
+        last_user_message="mera cash kitna hai",
+        last_msg_lower="mera cash kitna hai",
+        caller=caller,
+        active_company="CtrlBooks",
+        lang_code="hinglish",
+        is_ticket_intent=False,
+        is_voucher_intent=False,
+    )
+    assert handled_cb is True
+    assert tools_cb[0]["tool"] == "get_cash_bank_command"
+    assert tools_cb[0]["result"]["module"] == "cash"
+    print("  [PASS] 6. Cash Module Handler verified")
+
+    handled_bank, tools_bank, _, reply_bank = await handle_cash_bank(
+        last_user_message="HDFC bank ka balance batao",
+        last_msg_lower="hdfc bank ka balance batao",
+        caller=caller,
+        active_company="CtrlBooks",
+        lang_code="en-IN",
+        is_ticket_intent=False,
+        is_voucher_intent=False,
+    )
+    assert handled_bank is True
+    assert tools_bank[0]["result"]["search_query"] == "HDFC"
+    assert tools_bank[0]["result"]["module"] == "bank"
+    print("  [PASS] 7. Bank Search Filter (q=HDFC) verified")
+
+    handled_both, tools_both, _, reply_both = await handle_cash_bank(
+        last_user_message="cash aur bank dono dikhao",
+        last_msg_lower="cash aur bank dono dikhao",
+        caller=caller,
+        active_company="CtrlBooks",
+        lang_code="hinglish",
+        is_ticket_intent=False,
+        is_voucher_intent=False,
+    )
+    assert handled_both is True
+    assert tools_both[0]["result"]["module"] == "both"
+    print("  [PASS] 8. Combined Cash & Bank (Liquid Funds) verified")
+
+    # 9. Test AIGateway Full Orchestration
     gateway = AIGateway()
     res = await gateway.generate_response(
         messages=[{"role": "user", "content": "aaj ka day book dikhao"}],
@@ -119,10 +163,20 @@ async def run_modular_chat_tests():
     assert "content" in res
     assert len(res["tool_calls"]) > 0
     assert res["detected_language"] in ("Hinglish", "Hindi", "English")
-    print("  [PASS] 6. AIGateway Full Orchestration with Modular Handlers verified")
+    print("  [PASS] 9. AIGateway Full Orchestration with Modular Handlers verified")
+
+    # 10. Test AIGateway Cash & Bank Query
+    res_cb = await gateway.generate_response(
+        messages=[{"role": "user", "content": "mera cash kitna hai"}],
+        ctx=ctx,
+        company_name="CtrlBooks",
+        user_meta=caller,
+    )
+    assert any(t["tool"] == "get_cash_bank_command" for t in res_cb.get("tool_calls", []))
+    print("  [PASS] 10. AIGateway Cash & Bank Intent Routing verified")
 
     print("=" * 60)
-    print(" ALL MODULAR REFACTORING UNIT TESTS PASSED SUCCESSFULLY!")
+    print(" ALL MODULAR REFACTORING & CASH/BANK TESTS PASSED SUCCESSFULLY!")
     print("=" * 60 + "\n")
 
 

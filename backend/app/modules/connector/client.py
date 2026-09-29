@@ -1203,6 +1203,154 @@ class ConnectorClient:
             "rows": clean_rows[:limit],
         }
 
+    async def get_company_cash(
+        self,
+        company_name: Optional[str] = None,
+        company_id: Optional[str] = None,
+        page: int = 1,
+        limit: int = 10,
+        q: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetches Cash-in-hand accounts from GET /companies/{CompanyId}/cash."""
+        comp_details = await self.resolve_company_details(company_name=company_name, company_id=company_id, token=token)
+        resolved_cid = comp_details["company_id"]
+        effective_company = comp_details["company_name"]
+
+        params: Dict[str, Any] = {"page": page, "limit": limit}
+        if q:
+            params["q"] = q.strip()
+
+        path = f"/companies/{resolved_cid}/cash"
+        res = await self._request("GET", path, token=token, params=params)
+
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                if isinstance(val, dict):
+                    val = val.get("$numberDecimal") or val.get("value") or default
+                if val is None or val == "":
+                    return default
+                return float(str(val).replace(",", "").strip())
+            except Exception:
+                return default
+
+        raw_items = []
+        tot_count = 0
+        tot_amount = 0.0
+
+        if res.get("success") and res.get("data") is not None:
+            data = res.get("data")
+            if isinstance(data, dict):
+                raw_items = data.get("items") or []
+                tot_count = int(data.get("total") or len(raw_items))
+                if "totalAmount" in data and data["totalAmount"] is not None:
+                    tot_amount = _safe_float(data.get("totalAmount"))
+                else:
+                    tot_amount = sum(_safe_float(it.get("closingBalance") or 0.0) for it in raw_items)
+            elif isinstance(data, list):
+                raw_items = data
+                tot_count = len(raw_items)
+                tot_amount = sum(_safe_float(it.get("closingBalance") or 0.0) for it in raw_items)
+
+        items = []
+        for it in raw_items:
+            items.append({
+                "_id": str(it.get("_id") or ""),
+                "name": str(it.get("name") or "Cash"),
+                "group": str(it.get("group") or "Cash-in-hand"),
+                "ledgerType": str(it.get("ledgerType") or "CASH"),
+                "openingBalance": _safe_float(it.get("openingBalance") or 0.0),
+                "closingBalance": _safe_float(it.get("closingBalance") or 0.0),
+                "tallyExternalId": str(it.get("tallyExternalId") or ""),
+                "parent": str(it.get("parent") or "Cash-in-hand"),
+            })
+
+        return {
+            "success": True,
+            "company_name": effective_company,
+            "company_id": resolved_cid,
+            "module": "cash",
+            "total": tot_count,
+            "page": page,
+            "limit": limit,
+            "total_amount": round(tot_amount, 2),
+            "items": items,
+        }
+
+    async def get_company_bank(
+        self,
+        company_name: Optional[str] = None,
+        company_id: Optional[str] = None,
+        page: int = 1,
+        limit: int = 10,
+        q: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetches Bank accounts from GET /companies/{CompanyId}/bank."""
+        comp_details = await self.resolve_company_details(company_name=company_name, company_id=company_id, token=token)
+        resolved_cid = comp_details["company_id"]
+        effective_company = comp_details["company_name"]
+
+        params: Dict[str, Any] = {"page": page, "limit": limit}
+        if q:
+            params["q"] = q.strip()
+
+        path = f"/companies/{resolved_cid}/bank"
+        res = await self._request("GET", path, token=token, params=params)
+
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                if isinstance(val, dict):
+                    val = val.get("$numberDecimal") or val.get("value") or default
+                if val is None or val == "":
+                    return default
+                return float(str(val).replace(",", "").strip())
+            except Exception:
+                return default
+
+        raw_items = []
+        tot_count = 0
+        tot_amount = 0.0
+
+        if res.get("success") and res.get("data") is not None:
+            data = res.get("data")
+            if isinstance(data, dict):
+                raw_items = data.get("items") or []
+                tot_count = int(data.get("total") or len(raw_items))
+                if "totalAmount" in data and data["totalAmount"] is not None:
+                    tot_amount = _safe_float(data.get("totalAmount"))
+                else:
+                    tot_amount = sum(_safe_float(it.get("closingBalance") or 0.0) for it in raw_items)
+            elif isinstance(data, list):
+                raw_items = data
+                tot_count = len(raw_items)
+                tot_amount = sum(_safe_float(it.get("closingBalance") or 0.0) for it in raw_items)
+
+        items = []
+        for it in raw_items:
+            items.append({
+                "_id": str(it.get("_id") or ""),
+                "name": str(it.get("name") or "Bank Account"),
+                "group": str(it.get("group") or "Bank Accounts"),
+                "ledgerType": str(it.get("ledgerType") or "BANK"),
+                "openingBalance": _safe_float(it.get("openingBalance") or 0.0),
+                "closingBalance": _safe_float(it.get("closingBalance") or 0.0),
+                "tallyExternalId": str(it.get("tallyExternalId") or ""),
+                "parent": str(it.get("parent") or "Bank Accounts"),
+            })
+
+        return {
+            "success": True,
+            "company_name": effective_company,
+            "company_id": resolved_cid,
+            "module": "bank",
+            "total": tot_count,
+            "page": page,
+            "limit": limit,
+            "total_amount": round(tot_amount, 2),
+            "items": items,
+        }
+
     def build_tally_voucher_xml(
         self,
         company_name: str,

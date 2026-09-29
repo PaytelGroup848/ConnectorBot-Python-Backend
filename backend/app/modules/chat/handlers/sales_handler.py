@@ -16,6 +16,7 @@ async def handle_sales_analytics(
     is_ticket_intent: bool,
     is_voucher_intent: bool,
     is_accounting_reports_intent: bool,
+    is_cash_bank_intent: bool = False,
 ) -> Tuple[bool, List[Dict[str, Any]], str, Optional[str]]:
     """Handles dynamic sales and financial analytics/summary intent (Sales, Receipts, Orders, Credit Notes)."""
     has_specific_vnum = bool(
@@ -25,6 +26,7 @@ async def handle_sales_analytics(
     is_sales_analytics_intent = (
         (not is_ticket_intent)
         and (not is_voucher_intent)
+        and (not is_cash_bank_intent)
         and (not is_accounting_reports_intent)
         and (not has_specific_vnum)
         and bool(
@@ -190,12 +192,14 @@ async def handle_voucher_lookup(
     is_ticket_intent: bool,
     is_voucher_intent: bool,
     is_sales_analytics_intent: bool,
+    is_cash_bank_intent: bool = False,
 ) -> Tuple[bool, List[Dict[str, Any]], str, Optional[str]]:
     """Handles dynamic view/lookup voucher intent (Fetches synced invoices/vouchers from Cloud/Tally)."""
     is_view_voucher_intent = (
         (not is_ticket_intent)
         and (not is_voucher_intent)
         and (not is_sales_analytics_intent)
+        and (not is_cash_bank_intent)
         and bool(
             re.search(
                 r"\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous|kya\s+hai)\b.*?\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b|"

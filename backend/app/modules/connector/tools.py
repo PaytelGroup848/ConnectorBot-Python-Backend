@@ -536,6 +536,24 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cash_bank_command",
+            "description": "Retrieves real-time Cash in hand and Bank account balances, ledgers, and liquid fund positions from Tally Prime.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "account_type": {"type": "string", "description": "cash, bank, or both", "enum": ["cash", "bank", "both"]},
+                    "q": {"type": "string", "description": "Search term for specific bank name e.g. HDFC, SBI, ICICI"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max accounts to return (default: 10)"},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -910,6 +928,61 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
                 q=args.get("q"),
                 token=args.get("connector_token"),
             )
+
+    # 20. Cash & Bank Module (Cash in hand, Bank accounts, Liquid Funds)
+    elif tool_name == "get_cash_bank_command":
+        acc_type = str(args.get("account_type", "both")).lower()
+        comp_name = args.get("company_name")
+        comp_id = args.get("company_id")
+        q = args.get("q")
+        page = int(args.get("page", 1))
+        limit = int(args.get("limit", 10))
+        token = args.get("connector_token")
+
+        cash_res = None
+        bank_res = None
+
+        if acc_type in ["cash", "both", "all"]:
+            cash_res = await connector_client.get_company_cash(
+                company_name=comp_name, company_id=comp_id, page=page, limit=limit, q=q if acc_type == "cash" else None, token=token
+            )
+        if acc_type in ["bank", "both", "all"]:
+            bank_res = await connector_client.get_company_bank(
+                company_name=comp_name, company_id=comp_id, page=page, limit=limit, q=q, token=token
+            )
+
+        cash_items = (cash_res.get("items") or []) if cash_res else []
+        bank_items = (bank_res.get("items") or []) if bank_res else []
+        total_cash = cash_res.get("total_amount", 0.0) if cash_res else 0.0
+        total_bank = bank_res.get("total_amount", 0.0) if bank_res else 0.0
+
+        resolved_comp = (
+            (cash_res.get("company_name") if cash_res else None)
+            or (bank_res.get("company_name") if bank_res else None)
+            or comp_name
+            or "Default"
+        )
+        resolved_cid = (
+            (cash_res.get("company_id") if cash_res else None)
+            or (bank_res.get("company_id") if bank_res else None)
+            or comp_id
+            or ""
+        )
+
+        return {
+            "success": True,
+            "module": acc_type,
+            "company_name": resolved_comp,
+            "company_id": resolved_cid,
+            "search_query": q,
+            "cash_accounts": cash_items,
+            "bank_accounts": bank_items,
+            "total_cash": round(total_cash, 2),
+            "total_bank": round(total_bank, 2),
+            "total_liquid": round(total_cash + total_bank, 2),
+            "page": page,
+            "limit": limit,
+        }
 
     else:
         return {"error": f"Tool '{tool_name}' is not recognized or permitted."}
