@@ -491,6 +491,51 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # 18. Sales & Financial Module Analytics
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sales_analytics_command",
+            "description": "Retrieves real-time analytics and transaction lists for Sales, Credit Notes, Receipts, or Sales Orders.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "module": {"type": "string", "description": "sales, credit-notes, receipts, or sales-orders"},
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "q": {"type": "string", "description": "Search query filter (party or voucher number)"},
+                    "from_date": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
+                    "to_date": {"type": "string", "description": "End date (YYYY-MM-DD)"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max records (default: 20)"},
+                },
+            },
+        },
+    },
+    # 19. Official Accounting Reports (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
+    {
+        "type": "function",
+        "function": {
+            "name": "get_accounting_report_command",
+            "description": "Retrieves official accounting reports: Day Book, Trial Balance, Profit & Loss, Balance Sheet, or Voucher Lines.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_type": {"type": "string", "description": "day-book, trial-balance, pnl, balance-sheet, voucher-lines"},
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "from_date": {"type": "string", "description": "Start date for Day Book (YYYY-MM-DD)"},
+                    "to_date": {"type": "string", "description": "End date for Day Book (YYYY-MM-DD)"},
+                    "q": {"type": "string", "description": "Search query filter"},
+                    "group": {"type": "string", "description": "Ledger group filter for Trial Balance (e.g. Sundry Debtors)"},
+                    "ledger_type": {"type": "string", "description": "Ledger type for P&L or Balance Sheet (income/expense/asset/liability)"},
+                    "voucher_id": {"type": "string", "description": "Voucher ID for voucher-lines report"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max records (default: 50)"},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -797,5 +842,74 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
             company_id=args.get("company_id"),
             connector_token=args.get("connector_token"),
         )
+
+    # 18. Sales & Financial Module Analytics
+    elif tool_name == "get_sales_analytics_command":
+        return await connector_client.get_company_sales_module(
+            endpoint_suffix=args.get("module", "sales"),
+            company_name=args.get("company_name"),
+            company_id=args.get("company_id"),
+            q=args.get("q"),
+            from_date=args.get("from_date"),
+            to_date=args.get("to_date"),
+            page=int(args.get("page", 1)),
+            limit=int(args.get("limit", 20)),
+            token=args.get("connector_token"),
+        )
+
+    # 19. Official Accounting Reports (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
+    elif tool_name == "get_accounting_report_command":
+        report_type = args.get("report_type", "day-book")
+        if report_type == "trial-balance":
+            return await connector_client.get_company_trial_balance(
+                company_name=args.get("company_name"),
+                company_id=args.get("company_id"),
+                page=int(args.get("page", 1)),
+                limit=int(args.get("limit", 50)),
+                q=args.get("q"),
+                group=args.get("group"),
+                token=args.get("connector_token"),
+            )
+        elif report_type == "pnl":
+            return await connector_client.get_company_pnl(
+                company_name=args.get("company_name"),
+                company_id=args.get("company_id"),
+                page=int(args.get("page", 1)),
+                limit=int(args.get("limit", 50)),
+                q=args.get("q"),
+                ledger_type=args.get("ledger_type"),
+                token=args.get("connector_token"),
+            )
+        elif report_type == "balance-sheet":
+            return await connector_client.get_company_balance_sheet(
+                company_name=args.get("company_name"),
+                company_id=args.get("company_id"),
+                page=int(args.get("page", 1)),
+                limit=int(args.get("limit", 50)),
+                q=args.get("q"),
+                ledger_type=args.get("ledger_type"),
+                token=args.get("connector_token"),
+            )
+        elif report_type == "voucher-lines":
+            return await connector_client.get_company_voucher_lines(
+                voucher_id=str(args.get("voucher_id", "VCH-001")),
+                company_name=args.get("company_name"),
+                company_id=args.get("company_id"),
+                page=int(args.get("page", 1)),
+                limit=int(args.get("limit", 100)),
+                token=args.get("connector_token"),
+            )
+        else:
+            return await connector_client.get_company_day_book(
+                company_name=args.get("company_name"),
+                company_id=args.get("company_id"),
+                from_date=args.get("from_date"),
+                to_date=args.get("to_date"),
+                page=int(args.get("page", 1)),
+                limit=int(args.get("limit", 50)),
+                q=args.get("q"),
+                token=args.get("connector_token"),
+            )
+
     else:
         return {"error": f"Tool '{tool_name}' is not recognized or permitted."}
