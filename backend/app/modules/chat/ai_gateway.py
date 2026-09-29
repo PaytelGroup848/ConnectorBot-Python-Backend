@@ -8,6 +8,10 @@ from app.modules.connector.tools import execute_tool
 from app.modules.connector.commands import command_queue_service
 from app.modules.connector.client import connector_client
 from app.middleware.tenant_context import TenantContext
+from app.modules.chat.handlers.ticket_handler import handle_ticket_status_check, handle_ticket_creation
+from app.modules.chat.handlers.voucher_handler import handle_voucher_creation
+from app.modules.chat.handlers.reports_handler import handle_accounting_reports
+from app.modules.chat.handlers.sales_handler import handle_sales_analytics, handle_voucher_lookup
 
 logger = logging.getLogger("connector_ai.ai_gateway")
 
@@ -446,173 +450,41 @@ class AIGateway:
             )
 
         # 1.5 Check Support Ticket Status / Tracking Intent
-        ticket_id_match = re.search(r"CB-\d{8}-[A-Za-z0-9]{4}", last_user_message, re.IGNORECASE)
-        is_check_ticket_intent = bool(
-            ticket_id_match
-            or re.search(
-                r"\b(status|track|check|kya hua|update|solve hua|progress|state|closed|resolved|स्टेटस|चेक|अपडेट|सॉल्व)\b.*?\b(ticket|tickets|issue|complaint|शिकायत|टिकट)\b|\b(ticket|tickets|issue|complaint|शिकायत|टिकट)\b.*?\b(status|track|check|kya hua|update|solve hua|progress|state|closed|resolved|स्टेटस|चेक|अपडेट|सॉल्व)\b|\b(mera ticket|my ticket|pichla ticket|ticket ka kya hua)\b",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
-        )
-
         slot_missing_reply = None
-
-        if is_check_ticket_intent and db is not None:
-            from app.models.ticket import SupportTicket
-            from sqlalchemy import select, desc
-            from sqlalchemy.orm import selectinload
-
-            clean_tid = ticket_id_match.group(0).upper() if ticket_id_match else None
-            stmt = select(SupportTicket).options(selectinload(SupportTicket.messages)).order_by(desc(SupportTicket.created_at))
-            if clean_tid:
-                stmt = stmt.where(SupportTicket.id.ilike(f"%{clean_tid}%"))
-            else:
-                stmt = stmt.limit(5)
-
-            res = await db.execute(stmt)
-            matched_tickets = res.scalars().all()
-
-            if matched_tickets:
-                matched = matched_tickets[0]
-                agent_msgs = [m for m in matched.messages if m.sender_type in ("AGENT", "SUPPORT") and not m.is_internal]
-                latest_reply = agent_msgs[-1].message if agent_msgs else None
-
-                ticket_info = {
-                    "ticket_id": matched.id,
-                    "subject": matched.subject,
-                    "status": matched.status,
-                    "priority": matched.priority,
-                    "description": matched.description,
-                    "created_at": matched.created_at.isoformat(),
-                    "updated_at": matched.updated_at.isoformat() if matched.updated_at else None,
-                    "resolved_at": matched.resolved_at.isoformat() if matched.resolved_at else None,
-                    "engineer_reply": latest_reply,
-                    "department": (matched.ai_summary or {}).get("department", "L2 Connector Engineering"),
-                    "sla_tier": (matched.ai_summary or {}).get("sla_tier", "P3 - Standard"),
-                    "resolution_sla": (matched.ai_summary or {}).get("resolution_sla", "Within 4 Hours"),
-                    "diagnostics": (matched.ai_summary or {}).get("diagnostics", {}),
-                    "company": (matched.ai_summary or {}).get("company", active_company),
-                }
-                executed_tools.append({"tool": "check_support_ticket_status", "result": ticket_info})
-                tool_results_text += f"\n[Ticket Status Lookup]: ID={matched.id}, Status={matched.status}, Latest Reply='{latest_reply or 'No engineer notes yet'}'"
-            else:
-                slot_missing_reply = (
-                    f"Mujhe **{active_company}** ke liye koi matching support ticket nahi mila"
-                    + (f" (Ticket #{clean_tid})" if clean_tid else "")
-                    + ".\n\nAgar aapka koi issue pending hai ya naya ticket raise karna hai, toh boliye main abhi naya ticket bana deta hoon!"
-                )
+        is_check_ticket, t_tools, t_text, t_reply = await handle_ticket_status_check(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            db=db,
+        )
+        if is_check_ticket:
+            executed_tools.extend(t_tools)
+            tool_results_text += t_text
+            if t_reply:
+                slot_missing_reply = t_reply
 
         # 2. Check Support Ticket / Escalation Intent (Multilingual Corporate Intake)
-        is_ticket_intent = (not is_check_ticket_intent) and bool(
-            re.search(
-                r"\b(ticket|support\s+ticket|complaint|escalate|issue\s+raise|raise\s+a?\s*ticket|log\s+a?\s*ticket|bana do ticket|create ticket)\b|(?:टिकट|शिकायत|सपोर्ट\s*टिकट|ટિકિટ)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
+        handled_ticket, tc_tools, tc_text, tc_reply = await handle_ticket_creation(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            db=db,
+            conversation_id=conversation_id,
+            ctx=ctx,
+            lang_code=lang_code,
+            lang_name=lang_name,
+            messages=messages,
+            is_check_ticket_intent=is_check_ticket,
         )
+        if handled_ticket:
+            executed_tools.extend(tc_tools)
+            tool_results_text += tc_text
+            if tc_reply:
+                slot_missing_reply = tc_reply
+        is_ticket_intent = handled_ticket
 
-        if is_ticket_intent and db is not None:
-            from app.modules.tickets.service import TicketService
-            from app.modules.tickets.classifier import (
-                extract_issue_context_from_conversation,
-                classify_corporate_ticket,
-            )
-
-            live_tally = await connector_client.get_connection_status(
-                company_name=active_company,
-                user_email=caller["email"],
-                preferred_port=caller["tally_port"],
-            )
-            active_p = live_tally.get("tally_port") or "Auto-Detect"
-            has_context, full_issue_desc = extract_issue_context_from_conversation(last_user_message, messages)
-
-            if not has_context:
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"I am ready to generate an official **CtrlBooks Enterprise Support Ticket** for **{active_company}**!\n\n"
-                        "Please briefly describe the issue you are facing so I can route it to the right engineering team with live Tally diagnostics:\n"
-                        f"• **1. Tally Sync & Port {active_p}**: *'Create a ticket for Tally Port {active_p} sync error'*\n"
-                        "• **2. GST & e-Invoice**: *'Raise a ticket for GSTR-1 tax mismatch'*\n"
-                        "• **3. Voucher & Ledger Queue**: *'Create a ticket for pending sales voucher not posting'*"
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"मैं **{active_company}** के लिए आधिकारिक **CtrlBooks सपोर्ट टिकट** बनाने के लिए तैयार हूँ!\n\n"
-                        "कृपया अपनी समस्या का संक्षिप्त विवरण बताएं ताकि सही इंजीनियरिंग टीम को लाइव Tally डायग्नोस्टिक्स के साथ असाइन किया जा सके:\n"
-                        f"• *'टैली पोर्ट {active_p} सिंक एरर के लिए टिकट बना दो'*\n"
-                        "• *'GST रिटर्न मिसमैच के लिए टिकट दर्ज करो'*"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"Main **{active_company}** ke liye official **CtrlBooks Corporate Support Ticket** generate karne ke liye ready hoon!\n\n"
-                        "Kripya apna **Issue / Problem** batayein taaki main live Tally diagnostics ke sath sahi engineering team ko assign kar sakun:\n"
-                        f"• *'Tally Port {active_p} sync error ke liye urgent ticket bana do'*\n"
-                        "• *'Sales voucher ledger mismatch ka support ticket raise karo'*\n"
-                        "• *'GST return filing issue ke liye ticket bana do'*"
-                    )
-            else:
-                queued_cmds = command_queue_service.list_queued_commands()
-                company_queue_count = len([c for c in queued_cmds if c.get("company") == active_company])
-
-                spec = classify_corporate_ticket(
-                    issue_text=full_issue_desc,
-                    company_name=active_company,
-                    detected_language=lang_name,
-                    tally_status=live_tally,
-                    queued_vouchers_count=company_queue_count,
-                    caller_name=caller["name"],
-                    caller_email=caller["email"],
-                    caller_phone=caller["phone"],
-                )
-
-                ticket_svc = TicketService(db)
-                db_user_id = str(getattr(ctx, "user_id", None) or "1e336198-e0dc-4ede-bf84-20165e022c67")
-                db_tenant_id = str(getattr(ctx, "tenant_id", None) or "3733647b-374b-404a-8dc8-382b7de1abd3")
-                try:
-                    created_ticket = await ticket_svc.create_ticket(
-                        tenant_id=db_tenant_id,
-                        user_id=db_user_id,
-                        subject=spec["subject"],
-                        description=full_issue_desc,
-                        priority=spec["priority"],
-                        conversation_id=conversation_id,
-                        ai_summary=spec["ai_summary"],
-                    )
-                except Exception:
-                    await db.rollback()
-                    created_ticket = await ticket_svc.create_ticket(
-                        tenant_id="3733647b-374b-404a-8dc8-382b7de1abd3",
-                        user_id="1e336198-e0dc-4ede-bf84-20165e022c67",
-                        subject=spec["subject"],
-                        description=full_issue_desc,
-                        priority=spec["priority"],
-                        conversation_id=None,
-                        ai_summary=spec["ai_summary"],
-                    )
-                t_data = {
-                    "ticket_id": created_ticket.id,
-                    "subject": created_ticket.subject,
-                    "description": full_issue_desc,
-                    "priority": created_ticket.priority,
-                    "status": created_ticket.status,
-                    "company": active_company,
-                    "user_id": f"{caller['name']} ({caller['email']} | {caller['phone']})",
-                    "customer_name": caller["name"],
-                    "customer_email": caller["email"],
-                    "customer_phone": caller["phone"],
-                    "category_code": spec["category_code"],
-                    "category_name": spec["category_name"],
-                    "department": spec["department"],
-                    "sla_tier": spec["sla_tier"],
-                    "response_sla": spec["response_sla"],
-                    "resolution_sla": spec["resolution_sla"],
-                    "assigned_team": spec["assigned_team"],
-                    "diagnostics": spec["ai_summary"]["diagnostics"],
-                    "created_at": created_ticket.created_at.isoformat(),
-                }
-                executed_tools.append({"tool": "create_support_ticket", "result": t_data})
-                tool_results_text += f"\n[Corporate Support Ticket Created]: ID={created_ticket.id}, Dept={spec['department']}, SLA={spec['resolution_sla']}"
 
         # 3. Check Live Connection Status Intent (Multilingual keywords)
         if any(w in last_msg_lower for w in ["connect", "online", "status", "chal raha", "offline", "स्टेटस", "कनेक्ट", "ऑनलाइन", "સ્ટેટસ"]):
@@ -628,862 +500,83 @@ class AIGateway:
             executed_tools.append({"tool": "get_my_connection_status", "result": status_data})
             tool_results_text += f"\n[Live Status]: Tally Online={status_data.get('is_online')}, Port={status_data.get('tally_port')}, Source={status_data.get('detection_source')}, Agent Version={status_data.get('agent_version')}"
 
-        # 4. Dynamic Voucher Intent & Slot Filling (Supports Sales Invoice & Receipt Voucher + Dynamic GST Rate/IGST)
-        is_voucher_intent = (not is_ticket_intent) and bool(
-            re.search(
-                r"(voucher|invoice|bill|receipt|entry|इनवॉइस|बिल|वाउचर|रसीद|બિલ|इन्व्हॉइस).*?(bna|bana|create|generate|daal|karo|kaat|kat|make|new|बना|बनवा|બનાવો)|(bna|bana|create|generate|daal|karo|make|new|बना|बनवा|બનાવો).*?(voucher|invoice|bill|receipt|entry|इनवॉइस|बिल|वाउचर|रसीद|બિલ|इन्व्हॉइस)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
+        # 4. Dynamic Voucher Intent & Slot Filling (Sales, Receipt, Payment, Purchase, Notes, Contra, Journal)
+        handled_voucher, v_tools, v_text, v_reply = await handle_voucher_creation(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            ctx=ctx,
+            lang_code=lang_code,
+            lang_name=lang_name,
+            sample_party=sample_party,
+            today_date=today_date,
+            is_ticket_intent=is_ticket_intent,
+            extract_entities_fn=extract_voucher_entities,
         )
+        if handled_voucher:
+            executed_tools.extend(v_tools)
+            tool_results_text += v_text
+            if v_reply:
+                slot_missing_reply = v_reply
+        is_voucher_intent = handled_voucher
 
-        extracted = extract_voucher_entities(last_user_message) if is_voucher_intent else None
-
-        if is_voucher_intent and extracted:
-            amt = extracted.get("amount")
-            party = extracted.get("party")
-            v_type = extracted.get("voucher_type", "Sales")
-            gst_rate = extracted.get("gst_rate", 18.0)
-            is_igst = extracted.get("is_igst", False)
-
-            if not party and amt:
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"I am ready to generate a **{v_type} Voucher** for **₹{amt:,.2f}**!\n\n"
-                        f"Please provide the **Customer / Party Name** (e.g., *'{sample_party}'*)."
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"मैं **₹{amt:,.2f}** का **{v_type} वाउचर** बनाने के लिए तैयार हूँ!\n\n"
-                        f"कृपया **पार्टी / ग्राहक का नाम** बताएं (जैसे: *'{sample_party}'*)."
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"Main **₹{amt:,.2f}** ka **{v_type} Voucher** create karne ke liye ready hoon!\n\n"
-                        f"Kripya **Customer / Party Name** batayein (Jaise: *'{sample_party}'*)."
-                    )
-            elif not amt and party:
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"I am ready to create a **{v_type} Voucher** for **{party}**!\n\n"
-                        f"Please specify the **Voucher Amount**."
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"मैं **{party}** के लिए **{v_type} वाउचर** बनाने के लिए तैयार हूँ!\n\n"
-                        f"कृपया **राशि (Amount)** बताएं।"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"Main **{party}** ke liye **{v_type} Voucher** create karne ke liye ready hoon!\n\n"
-                        f"Kripya **Amount** batayein."
-                    )
-            elif not party and not amt:
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"To create a **{v_type} Voucher** in **{active_company}**, please specify the **Party Name** and **Amount**.\n\n"
-                        f"Example: *'Create a sales invoice for {sample_party} of ₹25,000'*"
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"**{active_company}** में वाउचर बनाने के लिए कृपया **पार्टी का नाम** और **राशि (Amount)** बताएं।\n\n"
-                        f"उदाहरण: *'{sample_party} के लिए 25,000 का सेल्स इनवॉइस बना दो'*"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"**{active_company}** me Voucher create karne ke liye kripya **Party Name** aur **Amount** batayein.\n\n"
-                        f"Format: *'{sample_party} ke liye 25,000 ka sales invoice bana do'*"
-                    )
-            else:
-                target_comp_name = extracted.get("target_company")
-                effective_company = active_company
-                effective_company_id = caller.get("company_id")
-
-                if target_comp_name:
-                    comp_details = await connector_client.resolve_company_details(
-                        company_name=target_comp_name,
-                        token=caller.get("connector_token"),
-                    )
-                    if comp_details.get("company_id"):
-                        effective_company = comp_details.get("company_name", target_comp_name)
-                        effective_company_id = comp_details["company_id"]
-                elif effective_company.lower() in ("ctrlbooks", "your company", "active company", "default", ""):
-                    try:
-                        comp_details = await connector_client.resolve_company_details(token=caller.get("connector_token"))
-                        effective_company = comp_details.get("company_name", effective_company)
-                        effective_company_id = comp_details.get("company_id", effective_company_id)
-                    except Exception:
-                        pass
-
-                common_kw = {
-                    "company_name": effective_company,
-                    "company_id": effective_company_id,
-                    "connector_token": caller.get("connector_token"),
-                    "tally_port": caller.get("tally_port"),
-                }
-
-                if v_type == "Receipt":
-                    voucher_data = await execute_tool(
-                        "create_receipt_voucher_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "bank_or_cash_ledger": "Bank Account",
-                            "amount": amt,
-                            "date": today_date,
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_receipt_voucher_command", "result": voucher_data})
-                elif v_type == "Payment":
-                    voucher_data = await execute_tool(
-                        "create_payment_voucher_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "bank_or_cash_ledger": "Bank Account",
-                            "amount": amt,
-                            "date": today_date,
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_payment_voucher_command", "result": voucher_data})
-                elif v_type == "Purchase":
-                    voucher_data = await execute_tool(
-                        "create_purchase_invoice_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "date": today_date,
-                            "total_amount": amt,
-                            "gst_rate": gst_rate,
-                            "items": [{"itemName": f"Material from {party}", "quantity": 1, "rate": amt, "amount": amt}],
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_purchase_invoice_command", "result": voucher_data})
-                elif v_type == "Credit Note":
-                    voucher_data = await execute_tool(
-                        "create_credit_note_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "amount": amt,
-                            "date": today_date,
-                            "reason": "Sales Return",
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_credit_note_command", "result": voucher_data})
-                elif v_type == "Debit Note":
-                    voucher_data = await execute_tool(
-                        "create_debit_note_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "amount": amt,
-                            "date": today_date,
-                            "reason": "Purchase Return",
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_debit_note_command", "result": voucher_data})
-                elif v_type == "Contra":
-                    voucher_data = await execute_tool(
-                        "create_contra_command",
-                        {
-                            **common_kw,
-                            "from_account": "Cash",
-                            "to_account": "Bank Account",
-                            "amount": amt,
-                            "date": today_date,
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_contra_command", "result": voucher_data})
-                elif v_type == "Journal":
-                    voucher_data = await execute_tool(
-                        "create_journal_command",
-                        {
-                            **common_kw,
-                            "amount": amt,
-                            "date": today_date,
-                            "narration": f"Journal entry for {party or 'General'}",
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_journal_command", "result": voucher_data})
-                else:
-                    voucher_data = await execute_tool(
-                        "create_sales_invoice_command",
-                        {
-                            **common_kw,
-                            "party_ledger": party,
-                            "date": today_date,
-                            "total_amount": amt,
-                            "gst_rate": gst_rate,
-                            "is_igst": is_igst,
-                            "narration": f"AI Multilingual {v_type} Voucher ({lang_name})",
-                            "items": [{"name": f"{v_type} - {party}", "itemName": f"{v_type} - {party}", "quantity": 1, "rate": amt, "units": "NOS", "amount": amt}],
-                        },
-                        ctx,
-                    )
-                    executed_tools.append({"tool": "create_sales_invoice_command", "result": voucher_data})
-
-                tool_results_text += f"\n[Voucher Queued]: Type={v_type}, ID={voucher_data.get('voucher_number')}, Company={effective_company}, Party={party}, Amount={amt}"
 
         # 4a. Dynamic Official Accounting Reports Intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
-        # Matches queries like: "mere aaj ka reports do", "aaj ka report", "day book", "daybook dikhao", "trial balance", "pnl report", "balance sheet", "voucher lines"
-        is_explicit_reports_keyword = bool(
-            re.search(
-                r"\b(day\s*book|daybook|trial\s*balance|trail\s*balance|profit\s*(?:and|&)\s*loss|pnl|p&l|balance\s*sheet|voucher\s*lines?|line\s*items?)\b|"
-                r"(?:डे\s*बुक|डेबुक|ट्रायल\s*बैलेंस|प्रॉफिट\s*एंड\s*लॉस|बैलेंस\s*शीट|वाउचर\s*लाइन्स)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
+        handled_reports, r_tools, r_text, r_reply = await handle_accounting_reports(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
         )
-        is_general_reports_request = bool(
-            re.search(
-                r"\b(mere|mera|apna|apne|my|our|all|aaj\s+ka|aaj\s+ke|daily)\s+(?:aaj\s+ka\s+|daily\s+)?reports?\b|"
-                r"\b(reports?\s+(?:do|dikhao|batao|dekhna|generate|chahiye|nikalo))\b|"
-                r"\b(aaj\s+ka\s+(?:hisab|khatiyan|transactions?|hisab\s*kitab))\b|"
-                r"(?:रिपोर्ट्स?\s*(?:दो|दिखाओ|बताओ)|आज\s*का\s*हिसाब)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
-        ) and not bool(re.search(r"\b(sales?|bikri|orders?|credit\s*notes?)\b", last_msg_lower))
+        if handled_reports:
+            executed_tools.extend(r_tools)
+            tool_results_text += r_text
+            if r_reply:
+                slot_missing_reply = r_reply
+        is_accounting_reports_intent = handled_reports
 
-        is_accounting_reports_intent = (not is_ticket_intent) and (not is_voucher_intent) and (is_explicit_reports_keyword or is_general_reports_request)
-
-        if is_accounting_reports_intent:
-            effective_company = active_company
-            effective_company_id = caller.get("company_id")
-
-            # Extract target company candidate if mentioned in the prompt
-            comp_patterns = [
-                r"^(?:in\s+)?(.*?)\s+(?:me|mein|में)\s+",
-                r"(?:company\s+|कंपनी\s+)?([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|company\s+ka|company\s+ki)\s+(?:report|reports|day\s*book|trial|balance|pnl)",
-            ]
-            for pat in comp_patterns:
-                m_c = re.search(pat, last_user_message, re.IGNORECASE)
-                if m_c:
-                    c_cand = m_c.group(1).strip()
-                    c_cand = re.sub(r"^(?:mere|apne|my|the|in|mujhe|is)\s+", "", c_cand, flags=re.IGNORECASE).strip()
-                    if len(c_cand) >= 3 and c_cand.lower() not in {"report", "reports", "daybook", "day", "book", "tally", "ctrlbooks"}:
-                        comp_details = await connector_client.resolve_company_details(
-                            company_name=c_cand,
-                            token=caller.get("connector_token"),
-                        )
-                        if comp_details.get("company_id"):
-                            effective_company = comp_details.get("company_name", c_cand)
-                            effective_company_id = comp_details["company_id"]
-                            break
-
-            if effective_company.lower() in ("ctrlbooks", "your company", "active company", "default", ""):
-                try:
-                    comp_details = await connector_client.resolve_company_details(token=caller.get("connector_token"))
-                    effective_company = comp_details.get("company_name", effective_company)
-                    effective_company_id = comp_details.get("company_id", effective_company_id)
-                except Exception:
-                    pass
-
-            # Detect report type & dates
-            today_obj = datetime.date.today()
-            today_iso = today_obj.isoformat()
-
-            # Date Range parsing
-            if any(w in last_msg_lower for w in ["kal", "yesterday", "pichla din"]):
-                y_obj = today_obj - datetime.timedelta(days=1)
-                from_date = y_obj.isoformat()
-                to_date = y_obj.isoformat()
-                period_label = f"Kal ({y_obj.strftime('%d %b %Y')})"
-            elif any(w in last_msg_lower for w in ["is mahine", "this month", "current month"]):
-                first_day = today_obj.replace(day=1).isoformat()
-                from_date = first_day
-                to_date = today_iso
-                period_label = f"Is Mahine ({today_obj.strftime('%B %Y')})"
-            elif any(w in last_msg_lower for w in ["pichle hafte", "last week", "7 din", "7 days"]):
-                week_ago = (today_obj - datetime.timedelta(days=7)).isoformat()
-                from_date = week_ago
-                to_date = today_iso
-                period_label = "Pichle 7 Din (Last 7 Days)"
-            else:
-                from_date = today_iso
-                to_date = today_iso
-                period_label = f"Aaj ({today_obj.strftime('%d %b %Y')})"
-
-            # Extract search query q if provided
-            search_q = None
-            q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:day\s*book|trial|pnl|balance|report)", last_user_message, re.IGNORECASE)
-            if q_match:
-                cand_q = q_match.group(1).strip()
-                cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
-                if len(cand_q) >= 2 and cand_q.lower() not in {"is", "company", "report", "reports", "daybook", "tally", "latest", "last", "aaj"}:
-                    search_q = cand_q
-
-            # 1. Trial Balance
-            if any(w in last_msg_lower for w in ["trial balance", "trail balance", "trial-balance", "ट्रायल बैलेंस"]):
-                group_filter = None
-                if any(w in last_msg_lower for w in ["debtor", "debtors", "sundry debtors", "देनदार"]):
-                    group_filter = "Sundry Debtors"
-                elif any(w in last_msg_lower for w in ["creditor", "creditors", "sundry creditors", "लेनदार"]):
-                    group_filter = "Sundry Creditors"
-                elif any(w in last_msg_lower for w in ["bank", "banks", "bank accounts"]):
-                    group_filter = "Bank Accounts"
-                elif any(w in last_msg_lower for w in ["cash", "nakad"]):
-                    group_filter = "Cash-in-hand"
-
-                report_data = await connector_client.get_company_trial_balance(
-                    company_name=effective_company,
-                    company_id=effective_company_id,
-                    page=1,
-                    limit=50,
-                    q=search_q,
-                    group=group_filter,
-                    token=caller.get("connector_token"),
-                )
-                report_data["period_label"] = period_label
-
-            # 2. Profit & Loss
-            elif any(w in last_msg_lower for w in ["profit and loss", "profit & loss", "pnl", "p&l", "munafa nuksan", "profit loss", "प्रॉफिट"]):
-                ledger_type = None
-                if any(w in last_msg_lower for w in ["expense", "expenses", "kharcha", "kharch"]):
-                    ledger_type = "expense"
-                elif any(w in last_msg_lower for w in ["income", "aamdani", "revenue"]):
-                    ledger_type = "income"
-
-                report_data = await connector_client.get_company_pnl(
-                    company_name=effective_company,
-                    company_id=effective_company_id,
-                    page=1,
-                    limit=50,
-                    q=search_q,
-                    ledger_type=ledger_type,
-                    token=caller.get("connector_token"),
-                )
-                report_data["period_label"] = period_label
-
-            # 3. Balance Sheet
-            elif any(w in last_msg_lower for w in ["balance sheet", "balancesheet", "balance-sheet", "बैलेंस शीट"]):
-                ledger_type = None
-                if any(w in last_msg_lower for w in ["asset", "assets", "sampatti"]):
-                    ledger_type = "asset"
-                elif any(w in last_msg_lower for w in ["liability", "liabilities", "dayitva"]):
-                    ledger_type = "liability"
-
-                report_data = await connector_client.get_company_balance_sheet(
-                    company_name=effective_company,
-                    company_id=effective_company_id,
-                    page=1,
-                    limit=50,
-                    q=search_q,
-                    ledger_type=ledger_type,
-                    token=caller.get("connector_token"),
-                )
-                report_data["period_label"] = period_label
-
-            # 4. Voucher Lines
-            elif any(w in last_msg_lower for w in ["voucher lines", "voucher line", "line items", "लाइन्स"]):
-                vid_match = re.search(r"(?:voucher\s*id|voucher|id|#)\s*[:=]?\s*([A-Za-z0-9\-_]{3,})", last_user_message, re.IGNORECASE)
-                voucher_id = vid_match.group(1).strip() if vid_match else "VCH-001"
-
-                report_data = await connector_client.get_company_voucher_lines(
-                    voucher_id=voucher_id,
-                    company_name=effective_company,
-                    company_id=effective_company_id,
-                    page=1,
-                    limit=100,
-                    token=caller.get("connector_token"),
-                )
-                report_data["period_label"] = period_label
-
-            # 5. Day Book (Default for "mere aaj ka reports do", "aaj ka report", "day book", etc.)
-            else:
-                report_data = await connector_client.get_company_day_book(
-                    company_name=effective_company,
-                    company_id=effective_company_id,
-                    from_date=from_date,
-                    to_date=to_date,
-                    page=1,
-                    limit=50,
-                    q=search_q,
-                    token=caller.get("connector_token"),
-                )
-                report_data["period_label"] = period_label
-
-            executed_tools.append({"tool": "get_accounting_report_command", "result": report_data})
-            rep_title = report_data.get("report_title", "Day Book Report")
-            rep_type = report_data.get("report_type", "day-book")
-            tot_cnt = report_data.get("total_count", 0)
-            rows = report_data.get("rows", [])
-            tool_results_text += f"\n[Accounting Report]: Type={rep_type}, Title='{rep_title}', Company={effective_company}, Count={tot_cnt}"
-
-            # Format natural language corporate response
-            if rep_type == "day-book":
-                tot_deb = report_data.get("total_debit", 0.0)
-                tot_crd = report_data.get("total_credit", 0.0)
-                net_val = report_data.get("net_amount", 0.0)
-                top_tx_txt = ""
-                for rw in rows[:3]:
-                    v_no = rw.get("voucher_number", "")
-                    p_led = rw.get("party_ledger", "Party")
-                    v_tp = rw.get("voucher_type", "VCH")
-                    amt = rw.get("amount", 0.0)
-                    dr_cr = "Dr" if rw.get("debit", 0) > 0 else "Cr"
-                    top_tx_txt += f"  • `{v_tp} #{v_no}` — **{p_led}**: ₹{amt:,.2f} ({dr_cr})\n"
-
-                if tot_cnt > 0 or tot_deb > 0 or tot_crd > 0:
-                    if lang_code == "en-IN":
-                        slot_missing_reply = (
-                            f"📊 **{effective_company} — {rep_title} ({period_label}):**\n\n"
-                            f"• **Total Day Book Entries:** **{tot_cnt}**\n"
-                            f"• **Total Debit:** **₹{tot_deb:,.2f}**\n"
-                            f"• **Total Credit:** **₹{tot_crd:,.2f}**\n"
-                            f"• **Net Flow:** **₹{net_val:,.2f}**\n\n"
-                        )
-                        if top_tx_txt:
-                            slot_missing_reply += f"**Key Transactions:**\n{top_tx_txt}\n"
-                        slot_missing_reply += "The interactive Executive Day Book card has been loaded below with instant WhatsApp sharing!"
-                    elif lang_code == "hi-IN":
-                        slot_missing_reply = (
-                            f"📊 **{effective_company} — {rep_title} ({period_label}):**\n\n"
-                            f"• **कुल दिन की प्रविष्टियाँ:** **{tot_cnt}**\n"
-                            f"• **कुल डेबिट:** **₹{tot_deb:,.2f}**\n"
-                            f"• **कुल क्रेडिट:** **₹{tot_crd:,.2f}**\n"
-                            f"• **नेट फ्लो:** **₹{net_val:,.2f}**\n\n"
-                        )
-                        if top_tx_txt:
-                            slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_tx_txt}\n"
-                        slot_missing_reply += "नीचे लाइव डे बुक कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
-                    else:
-                        slot_missing_reply = (
-                            f"📊 **{effective_company}** ka **{rep_title}** ({period_label}) mil gaya hai:\n\n"
-                            f"• **Kul Day Book Entries:** **{tot_cnt}**\n"
-                            f"• **Total Debit:** **₹{tot_deb:,.2f}**\n"
-                            f"• **Total Credit:** **₹{tot_crd:,.2f}**\n"
-                            f"• **Net Flow:** **₹{net_val:,.2f}**\n\n"
-                        )
-                        if top_tx_txt:
-                            slot_missing_reply += f"**Top Transactions:**\n{top_tx_txt}\n"
-                        slot_missing_reply += "Aapke liye interactive live Day Book card niche ready hai, jise aap direct WhatsApp par share kar sakte hain!"
-                else:
-                    slot_missing_reply = f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi Day Book entry nahi mili (Total: ₹0.00).\nAgar aap naya voucher banana chahte hain, toh batayein main abhi Tally me post kar deta hoon!"
-
-            elif rep_type == "trial-balance":
-                tot_deb = report_data.get("total_debit", 0.0)
-                tot_crd = report_data.get("total_credit", 0.0)
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"⚖️ **{effective_company} — {rep_title}:**\n\n"
-                        f"• **Total Ledgers / Accounts:** **{tot_cnt}**\n"
-                        f"• **Total Debit Balance:** **₹{tot_deb:,.2f}**\n"
-                        f"• **Total Credit Balance:** **₹{tot_crd:,.2f}**\n"
-                        f"• **Trial Balance Status:** `{'BALANCED' if tot_deb == tot_crd else 'DISCREPANCY CHECK'}`\n\n"
-                        "The interactive Trial Balance ledger breakdown card is loaded below with WhatsApp export!"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"⚖️ **{effective_company}** ka **{rep_title}** ready hai:\n\n"
-                        f"• **Total Ledgers:** **{tot_cnt}**\n"
-                        f"• **Total Debit:** **₹{tot_deb:,.2f}**\n"
-                        f"• **Total Credit:** **₹{tot_crd:,.2f}**\n\n"
-                        "Aapke liye verified Trial Balance card niche ready hai!"
-                    )
-
-            elif rep_type == "pnl":
-                tot_inc = report_data.get("total_income", 0.0)
-                tot_exp = report_data.get("total_expense", 0.0)
-                net_p = report_data.get("net_profit", 0.0)
-                p_label = "Net Profit" if net_p >= 0 else "Net Loss"
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"📈 **{effective_company} — Profit & Loss Statement:**\n\n"
-                        f"• **Total Revenue / Income:** **₹{tot_inc:,.2f}**\n"
-                        f"• **Total Expenses:** **₹{tot_exp:,.2f}**\n"
-                        f"• **{p_label}:** **₹{abs(net_p):,.2f}** ({'Profitable' if net_p >= 0 else 'Deficit'})\n\n"
-                        "The interactive P&L breakdown card is loaded below!"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"📈 **{effective_company}** ka **Profit & Loss Report** ready hai:\n\n"
-                        f"• **Total Income / Sales:** **₹{tot_inc:,.2f}**\n"
-                        f"• **Total Expenses:** **₹{tot_exp:,.2f}**\n"
-                        f"• **{p_label}:** **₹{abs(net_p):,.2f}**\n\n"
-                        "Aapke liye live P&L statement card niche ready hai!"
-                    )
-
-            elif rep_type == "balance-sheet":
-                tot_ast = report_data.get("total_assets", 0.0)
-                tot_lia = report_data.get("total_liabilities", 0.0)
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"🏛️ **{effective_company} — Balance Sheet Report:**\n\n"
-                        f"• **Total Assets:** **₹{tot_ast:,.2f}**\n"
-                        f"• **Total Liabilities:** **₹{tot_lia:,.2f}**\n\n"
-                        "The interactive Balance Sheet breakdown card is loaded below!"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"🏛️ **{effective_company}** ka **Balance Sheet Report** ready hai:\n\n"
-                        f"• **Total Assets:** **₹{tot_ast:,.2f}**\n"
-                        f"• **Total Liabilities:** **₹{tot_lia:,.2f}**\n\n"
-                        "Aapke liye live Balance Sheet card niche ready hai!"
-                    )
-
-            elif rep_type == "voucher-lines":
-                tot_amt = report_data.get("total_amount", 0.0)
-                v_id = report_data.get("voucher_id", "")
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"📝 **{effective_company} — Voucher Lines (#{v_id}):**\n\n"
-                        f"• **Line Items Count:** **{tot_cnt}**\n"
-                        f"• **Total Itemized Amount:** **₹{tot_amt:,.2f}**\n\n"
-                        "Item details card is loaded below!"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"📝 **{effective_company}** ka **Voucher #{v_id} Lines** ready hai:\n\n"
-                        f"• **Total Line Items:** **{tot_cnt}**\n"
-                        f"• **Total Amount:** **₹{tot_amt:,.2f}**\n\n"
-                        "Aapke liye voucher line items card niche ready hai!"
-                    )
 
         # 4b. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
-        # Matches queries like: "mere aaj ka sales batao", "today's sales", "aaj kitni sale hui", "is mahine ka sales", "aaj ka collection batao"
-        has_specific_vnum = bool(re.search(r"(?:invoice|voucher|bill|inv)\s*(?:no\.?|num\.?|#)\s*[A-Za-z0-9\-_]+", last_user_message, re.IGNORECASE)) and not bool(re.search(r"\b(total|aaj|today|kitna|kitni|kitne|summary|report)\b", last_msg_lower))
-        is_sales_analytics_intent = (not is_ticket_intent) and (not is_voucher_intent) and (not is_accounting_reports_intent) and (not has_specific_vnum) and bool(
-            re.search(
-                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
-                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?)\b|"
-                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?)\b|"
-                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
+        handled_sales, s_tools, s_text, s_reply = await handle_sales_analytics(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            sample_party=sample_party,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+            is_accounting_reports_intent=is_accounting_reports_intent,
         )
+        if handled_sales:
+            executed_tools.extend(s_tools)
+            tool_results_text += s_text
+            if s_reply:
+                slot_missing_reply = s_reply
+        is_sales_analytics_intent = handled_sales
 
-        if is_sales_analytics_intent:
-            effective_company = active_company
-            effective_company_id = caller.get("company_id")
-
-            # Determine endpoint and module label
-            if any(w in last_msg_lower for w in ["credit note", "credit notes", "creditnote", "sales return", "क्रेडिट नोट"]):
-                target_module = "credit-notes"
-                module_name = "Credit Note"
-            elif any(w in last_msg_lower for w in ["receipt", "receipts", "collection", "jama", "payment", "रसीद"]):
-                target_module = "receipts"
-                module_name = "Receipt"
-            elif any(w in last_msg_lower for w in ["sales order", "sales orders", "salesorder", "order", "orders", "ऑर्डर"]):
-                target_module = "sales-orders"
-                module_name = "Sales Order"
-            else:
-                target_module = "sales"
-                module_name = "Sales"
-
-            # Determine date range
-            today_obj = datetime.date.today()
-            today_iso = today_obj.isoformat()
-            if any(w in last_msg_lower for w in ["kal", "yesterday", "pichla din"]):
-                y_obj = today_obj - datetime.timedelta(days=1)
-                from_date = y_obj.isoformat()
-                to_date = y_obj.isoformat()
-                period_label = f"Kal ({y_obj.strftime('%d %b %Y')})"
-            elif any(w in last_msg_lower for w in ["is mahine", "this month", "current month"]):
-                first_day = today_obj.replace(day=1).isoformat()
-                from_date = first_day
-                to_date = today_iso
-                period_label = f"Is Mahine ({today_obj.strftime('%B %Y')})"
-            elif any(w in last_msg_lower for w in ["pichle hafte", "last week", "7 din", "7 days"]):
-                week_ago = (today_obj - datetime.timedelta(days=7)).isoformat()
-                from_date = week_ago
-                to_date = today_iso
-                period_label = "Pichle 7 Din (Last 7 Days)"
-            else:
-                # Default to today
-                from_date = today_iso
-                to_date = today_iso
-                period_label = f"Aaj ({today_obj.strftime('%d %b %Y')})"
-
-            # Extract search query q if user specified a party name or voucher query
-            search_q = None
-            q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:sales|sale|receipt|collection|order|credit)", last_user_message, re.IGNORECASE)
-            if q_match:
-                cand_q = q_match.group(1).strip()
-                cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
-                if len(cand_q) >= 2 and cand_q.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "aaj", "total"}:
-                    search_q = cand_q
-
-            # Company details resolution
-            comp_details = await connector_client.resolve_company_details(
-                company_name=effective_company,
-                company_id=effective_company_id,
-                token=caller.get("connector_token"),
-            )
-            effective_company = comp_details.get("company_name", effective_company)
-            effective_company_id = comp_details.get("company_id", effective_company_id)
-
-            # Query the target module
-            analytics_data = await connector_client.get_company_sales_module(
-                endpoint_suffix=target_module,
-                company_name=effective_company,
-                company_id=effective_company_id,
-                q=search_q,
-                from_date=from_date,
-                to_date=to_date,
-                page=1,
-                limit=20,
-                token=caller.get("connector_token"),
-            )
-            analytics_data["period_label"] = period_label
-
-            executed_tools.append({"tool": "get_sales_analytics_command", "result": analytics_data})
-            tot_amt = analytics_data.get("total_amount", 0.0)
-            tot_cnt = analytics_data.get("total_count", 0)
-            items_list = analytics_data.get("items", [])
-            tool_results_text += f"\n[Sales Analytics]: Company={effective_company}, Module={module_name}, Period={period_label}, TotalAmount={tot_amt}, TotalCount={tot_cnt}"
-
-            # Format natural language corporate response
-            if tot_cnt > 0 or tot_amt > 0:
-                top_items_txt = ""
-                for itm in items_list[:3]:
-                    top_items_txt += f"  • `{itm.get('voucher_number', 'VCH')}` — **{itm.get('party_ledger', 'Customer')}**: ₹{itm.get('amount', 0):,.2f}\n"
-
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"📊 **{effective_company} — {period_label} {module_name} Report:**\n\n"
-                        f"• **Total {module_name} Value:** **₹{tot_amt:,.2f}**\n"
-                        f"• **Total Count:** **{tot_cnt}** {module_name.lower()}(s)\n"
-                        f"• **Period Range:** {from_date} to {to_date}\n\n"
-                    )
-                    if top_items_txt:
-                        slot_missing_reply += f"**Key Transactions:**\n{top_items_txt}\n"
-                    slot_missing_reply += "The interactive financial summary card has been loaded below with instant WhatsApp sharing!"
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"📊 **{effective_company} — {period_label} {module_name} रिपोर्ट:**\n\n"
-                        f"• **कुल राशि (Total Amount):** **₹{tot_amt:,.2f}**\n"
-                        f"• **कुल वाउचर/बिल संख्या:** **{tot_cnt}**\n"
-                        f"• **तारीख सीमा:** {from_date} से {to_date}\n\n"
-                    )
-                    if top_items_txt:
-                        slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_items_txt}\n"
-                    slot_missing_reply += "नीचे लाइव समरी कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
-                else:
-                    slot_missing_reply = (
-                        f"📊 **{effective_company}** ka **{period_label}** ka **{module_name}** summary mil gaya hai:\n\n"
-                        f"• **Kul Bikri / Total Amount:** **₹{tot_amt:,.2f}**\n"
-                        f"• **Total Vouchers / Invoices:** **{tot_cnt}**\n"
-                        f"• **Date Period:** {from_date} se {to_date}\n\n"
-                    )
-                    if top_items_txt:
-                        slot_missing_reply += f"**Top Transactions:**\n{top_items_txt}\n"
-                    slot_missing_reply += "Aapke liye interactive live summary card niche ready hai, jise aap direct WhatsApp par share kar sakte hain!"
-            else:
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"ℹ️ In **{effective_company}**, no {module_name.lower()} records were found for **{period_label}** (Total: ₹0.00).\n\n"
-                        f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime? (e.g. *'Create sales invoice for {sample_party} of ₹15,000'*)"
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई {module_name.lower()} रिकॉर्ड नहीं मिला (कुल: ₹0.00)।\n\n"
-                        f"क्या आप नया वाउचर बनाना चाहते हैं? (जैसे: *'{sample_party} के लिए 15,000 का सेल्स इनवॉइस बना दो'*)"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
-                        f"Agar aapko naya voucher banana hai, toh boliye main abhi Tally me post kar deta hoon! (e.g. *'{sample_party} ke liye 15,000 ka sales invoice bana do'*)"
-                    )
-
-        # 4b. Dynamic View/Lookup Voucher Intent (Fetches synced invoices/vouchers from Cloud/Tally)
-        is_view_voucher_intent = (not is_ticket_intent) and (not is_voucher_intent) and (not is_sales_analytics_intent) and bool(
-            re.search(
-                r"\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous|kya\s+hai)\b.*?\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b|"
-                r"\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b.*?\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous)\b|"
-                r"\b(mera|mere|apna|apne|my|our)\s+(?:sales\s+)?(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|entry|entries)\b|"
-                r"(?:दिखाओ|देखो|दिखाना|બતાવો|દાખવા)",
-                last_msg_lower,
-                re.IGNORECASE,
-            )
+        # 4c. Dynamic View/Lookup Voucher Intent (Fetches synced invoices/vouchers from Cloud/Tally)
+        handled_vlookup, vl_tools, vl_text, vl_reply = await handle_voucher_lookup(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            today_date=today_date,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+            is_sales_analytics_intent=is_sales_analytics_intent,
         )
+        if handled_vlookup:
+            executed_tools.extend(vl_tools)
+            tool_results_text += vl_text
+            if vl_reply:
+                slot_missing_reply = vl_reply
 
-        if is_view_voucher_intent:
-            effective_company = active_company
-            effective_company_id = caller.get("company_id")
-
-            # Extract target company candidate if mentioned in the prompt
-            comp_view_patterns = [
-                r"^(?:in\s+)?(.*?)\s+(?:me|mein|में)\s+",
-                r"(?:company\s+|कंपनी\s+)?([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|company\s+ka|company\s+ki)\s+(?:voucher|invoice|bill|receipt)",
-            ]
-            for pat in comp_view_patterns:
-                m_c = re.search(pat, last_user_message, re.IGNORECASE)
-                if m_c:
-                    c_cand = m_c.group(1).strip()
-                    c_cand = re.sub(r"^(?:mere|apne|my|the|in|mujhe|is)\s+", "", c_cand, flags=re.IGNORECASE).strip()
-                    if len(c_cand) >= 3 and c_cand.lower() not in {"bill", "invoice", "voucher", "karo", "tally", "ctrlbooks"}:
-                        comp_details = await connector_client.resolve_company_details(
-                            company_name=c_cand,
-                            token=caller.get("connector_token"),
-                        )
-                        if comp_details.get("company_id"):
-                            effective_company = comp_details.get("company_name", c_cand)
-                            effective_company_id = comp_details["company_id"]
-                            break
-
-            # If effective_company is generic/default, resolve from connected companies
-            if effective_company.lower() in ("ctrlbooks", "your company", "active company", "default", ""):
-                try:
-                    comp_details = await connector_client.resolve_company_details(token=caller.get("connector_token"))
-                    effective_company = comp_details.get("company_name", effective_company)
-                    effective_company_id = comp_details.get("company_id", effective_company_id)
-                except Exception:
-                    pass
-
-            # Extract voucher number if specified (e.g., "invoice #2", "bill 101", "INV-12")
-            v_num = None
-            v_num_match = re.search(r"(?:invoice|voucher|bill|inv|no|number|#)\s*(?:no\.?|num\.?|#)?\s*([A-Za-z0-9\-_]+)", last_user_message, re.IGNORECASE)
-            if v_num_match:
-                cand_num = v_num_match.group(1).strip()
-                if cand_num.lower() not in {"dikhao", "dekho", "view", "show", "hai", "batao", "karo", "mera", "mere", "ke", "ka", "ki", "me", "mein", "sales", "bill", "invoice", "voucher"}:
-                    v_num = cand_num
-            if not v_num:
-                v_num_match2 = re.search(r"(\d+)\s*(?:number|no|num)?\s*(?:ka\s+)?(?:bill|invoice|voucher)", last_user_message, re.IGNORECASE)
-                if v_num_match2:
-                    v_num = v_num_match2.group(1).strip()
-
-            # Extract party search query (e.g., "SuperFoods ka bill dikhao")
-            party_search = None
-            party_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:bill|invoice|voucher|इनवॉइस|बिल|वाउचर)", last_user_message, re.IGNORECASE)
-            if party_match:
-                cand_party = party_match.group(1).strip()
-                cand_party = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne)\s+", "", cand_party, flags=re.IGNORECASE).strip()
-                if len(cand_party) >= 2 and cand_party.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "tally", "latest", "last", "pichla"}:
-                    if cand_party.lower() not in effective_company.lower() and effective_company.lower() not in cand_party.lower():
-                        party_search = cand_party
-
-            v_type_filter = "Receipt" if any(w in last_msg_lower for w in ["receipt", "रसीद"]) else "Sales"
-
-            # Query real-time synchronized vouchers from CtrlBooks Cloud API / Tally Prime
-            vouchers = await connector_client.get_company_vouchers(
-                company_name=effective_company,
-                company_id=effective_company_id,
-                voucher_type=v_type_filter,
-                voucher_number=v_num,
-                search=party_search,
-                limit=5,
-                token=caller.get("connector_token"),
-            )
-
-            if vouchers:
-                top_v = vouchers[0]
-                top_amt = 0.0
-                try:
-                    raw_val = top_v.get("amount")
-                    if isinstance(raw_val, dict):
-                        raw_val = raw_val.get("$numberDecimal") or raw_val.get("value") or 0.0
-                    top_amt = float(str(raw_val).replace(",", "").strip() if raw_val is not None and str(raw_val).strip() != "" else 0.0)
-                except Exception:
-                    top_amt = 0.0
-
-                top_items = top_v.get("items") or []
-                if not top_items:
-                    top_items = [{
-                        "name": f"{top_v.get('voucher_type', 'Sales')} - {top_v.get('party_ledger')}",
-                        "itemName": f"{top_v.get('voucher_type', 'Sales')} - {top_v.get('party_ledger')}",
-                        "quantity": 1,
-                        "rate": top_amt,
-                        "amount": top_amt,
-                    }]
-
-                card_data = {
-                    "success": True,
-                    "status": top_v.get("status", "SYNCED"),
-                    "command_type": "CREATE_VOUCHER",
-                    "command_hash": top_v.get("id") or "synced_voucher",
-                    "command_id": top_v.get("id"),
-                    "voucher_number": top_v.get("voucher_number"),
-                    "company": effective_company,
-                    "company_id": effective_company_id,
-                    "party_name": top_v.get("party_ledger"),
-                    "payload": {
-                        "type": "CREATE_VOUCHER",
-                        "companyName": effective_company,
-                        "payload": {
-                            "voucher_type": top_v.get("voucher_type", "Sales"),
-                            "party_ledger": top_v.get("party_ledger"),
-                            "date": top_v.get("date"),
-                            "amount": top_amt,
-                            "taxable_amount": top_amt,
-                            "gst_total": 0.0,
-                            "narration": top_v.get("narration") or f"Invoice #{top_v.get('voucher_number')}",
-                            "items": top_items,
-                        },
-                    },
-                }
-
-                executed_tools.append({"tool": "create_sales_invoice_command", "result": card_data})
-                executed_tools.append({"tool": "get_company_vouchers_command", "result": {"vouchers": vouchers, "count": len(vouchers)}})
-                tool_results_text += f"\n[Vouchers Retrieved]: Company={effective_company}, Total={len(vouchers)}, TopVoucher={top_v.get('voucher_number')}, Party={top_v.get('party_ledger')}, Amount={top_amt}"
-
-                v_num_disp = top_v.get("voucher_number", "N/A")
-                party_disp = top_v.get("party_ledger", "Customer")
-                amt_disp = top_amt
-                date_disp = top_v.get("date") or today_date
-                v_type_disp = top_v.get("voucher_type", "Sales")
-                status_disp = top_v.get("status", "SYNCED")
-
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"Here is the verified **{v_type_disp} Invoice** for **{party_disp}** from **{effective_company}**:\n\n"
-                        f"• **Company**: {effective_company}\n"
-                        f"• **Invoice Number**: `{v_num_disp}`\n"
-                        f"• **Party Name**: {party_disp}\n"
-                        f"• **Date**: {date_disp}\n"
-                        f"• **Total Amount**: ₹{amt_disp:,.2f}\n"
-                        f"• **Tally Sync Status**: `{status_disp}`\n\n"
-                        f"The interactive invoice card has been loaded below with full details and instant WhatsApp sharing!"
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"ये रहा **{effective_company}** में **{party_disp}** का **{v_type_disp} इनवॉइस**:\n\n"
-                        f"• **कंपनी**: {effective_company}\n"
-                        f"• **इनवॉइस नंबर**: `{v_num_disp}`\n"
-                        f"• **पार्टी का नाम**: {party_disp}\n"
-                        f"• **दिनांक**: {date_disp}\n"
-                        f"• **कुल राशि**: ₹{amt_disp:,.2f}\n"
-                        f"• **टैली सिंक स्टेटस**: `{status_disp}`\n\n"
-                        f"नीचे डिजिटल इनवॉइस कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"Ji bhai! **{effective_company}** ka verified **{v_type_disp} Invoice** mil gaya hai:\n\n"
-                        f"• **Company**: {effective_company}\n"
-                        f"• **Invoice Number**: `{v_num_disp}`\n"
-                        f"• **Party Name**: {party_disp}\n"
-                        f"• **Date**: {date_disp}\n"
-                        f"• **Total Amount**: ₹{amt_disp:,.2f}\n"
-                        f"• **Tally Sync Status**: `{status_disp}`\n\n"
-                        f"Aapke liye interactive digital invoice card niche ready hai, jise aap direct WhatsApp par share ya print kar sakte hain!"
-                    )
-            else:
-                executed_tools.append({"tool": "get_company_vouchers_command", "result": {"vouchers": [], "count": 0}})
-                search_detail = f" ('{party_search}' ke liye)" if party_search else ""
-                if lang_code == "en-IN":
-                    slot_missing_reply = (
-                        f"No vouchers were found in **{effective_company}**{search_detail}.\n\n"
-                        f"Would you like me to create a new invoice for this party? (e.g. *'Create sales invoice for {party_search or 'SuperFoods'} of ₹5,000'*)"
-                    )
-                elif lang_code == "hi-IN":
-                    slot_missing_reply = (
-                        f"**{effective_company}** में कोई वाउचर नहीं मिला{search_detail}।\n\n"
-                        f"क्या आप नया इनवॉइस बनाना चाहते हैं? (जैसे: *'{party_search or 'SuperFoods'} के लिए 5,000 का बिल बना दो'*)"
-                    )
-                else:
-                    slot_missing_reply = (
-                        f"**{effective_company}** me abhi koi voucher nahi mila{search_detail}.\n\n"
-                        f"Kya aap naya voucher create karna chahte hain? Example: *'{party_search or 'SuperFoods'} ko 5000 ka bill bana do'*"
-                    )
 
         elif any(w in last_msg_lower for w in ["sync", "fail", "error", "problem", "nahi ho raha", "सिंक"]):
             sync_data = await execute_tool("get_my_sync_status", {"company_name": active_company}, ctx)
