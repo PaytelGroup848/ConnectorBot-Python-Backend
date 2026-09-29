@@ -15,9 +15,10 @@ async def handle_accounting_reports(
     is_ticket_intent: bool,
     is_voucher_intent: bool,
     is_cash_bank_intent: bool = False,
+    is_parties_intent: bool = False,
 ) -> Tuple[bool, List[Dict[str, Any]], str, Optional[str]]:
     """Handles accounting reports intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)."""
-    if is_ticket_intent or is_voucher_intent or is_cash_bank_intent:
+    if is_ticket_intent or is_voucher_intent or is_cash_bank_intent or is_parties_intent:
         return False, [], "", None
 
     is_explicit_reports_keyword = bool(

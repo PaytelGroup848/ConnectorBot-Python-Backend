@@ -175,8 +175,35 @@ async def run_modular_chat_tests():
     assert any(t["tool"] == "get_cash_bank_command" for t in res_cb.get("tool_calls", []))
     print("  [PASS] 10. AIGateway Cash & Bank Intent Routing verified")
 
+    # 11. Test Parties Module Handler (Single Party Lookup)
+    from app.modules.chat.handlers.party_handler import handle_parties
+    handled_p, tools_p, _, reply_p = await handle_parties(
+        last_user_message="20 Microns Limited party ka balance kitna hai?",
+        last_msg_lower="20 microns limited party ka balance kitna hai?",
+        caller=caller,
+        active_company="Annai Agency - 2022-2023",
+        lang_code="hinglish",
+        is_ticket_intent=False,
+        is_voucher_intent=False,
+        is_cash_bank_intent=False,
+    )
+    assert handled_p is True
+    assert tools_p[0]["tool"] == "get_parties_command"
+    assert tools_p[0]["result"]["search_query"] == "20 Microns Limited"
+    print("  [PASS] 11. Parties Handler (Single Party Search) verified")
+
+    # 12. Test AIGateway Parties Query Orchestration
+    res_p = await gateway.generate_response(
+        messages=[{"role": "user", "content": "meri parties dikhao"}],
+        ctx=ctx,
+        company_name="Annai Agency - 2022-2023",
+        user_meta=caller,
+    )
+    assert any(t["tool"] == "get_parties_command" for t in res_p.get("tool_calls", []))
+    print("  [PASS] 12. AIGateway Parties Intent Routing verified")
+
     print("=" * 60)
-    print(" ALL MODULAR REFACTORING & CASH/BANK TESTS PASSED SUCCESSFULLY!")
+    print(" ALL MODULAR REFACTORING, CASH/BANK & PARTIES TESTS PASSED SUCCESSFULLY!")
     print("=" * 60 + "\n")
 
 

@@ -13,6 +13,7 @@ from app.modules.chat.handlers.voucher_handler import handle_voucher_creation
 from app.modules.chat.handlers.reports_handler import handle_accounting_reports
 from app.modules.chat.handlers.sales_handler import handle_sales_analytics, handle_voucher_lookup
 from app.modules.chat.handlers.cash_bank_handler import handle_cash_bank
+from app.modules.chat.handlers.party_handler import handle_parties
 
 logger = logging.getLogger("connector_ai.ai_gateway")
 
@@ -541,8 +542,8 @@ class AIGateway:
         is_cash_bank_intent = handled_cash_bank
 
 
-        # 4b. Dynamic Official Accounting Reports Intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
-        handled_reports, r_tools, r_text, r_reply = await handle_accounting_reports(
+        # 4b. Dynamic Parties & Customer/Supplier Module Intent (Party Balances, Debtors, Outstandings, Contacts)
+        handled_parties, p_tools, p_text, p_reply = await handle_parties(
             last_user_message=last_user_message,
             last_msg_lower=last_msg_lower,
             caller=caller,
@@ -552,6 +553,26 @@ class AIGateway:
             is_voucher_intent=is_voucher_intent,
             is_cash_bank_intent=is_cash_bank_intent,
         )
+        if handled_parties:
+            executed_tools.extend(p_tools)
+            tool_results_text += p_text
+            if p_reply:
+                slot_missing_reply = p_reply
+        is_parties_intent = handled_parties
+
+
+        # 4c. Dynamic Official Accounting Reports Intent (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
+        handled_reports, r_tools, r_text, r_reply = await handle_accounting_reports(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+            is_cash_bank_intent=is_cash_bank_intent,
+            is_parties_intent=is_parties_intent,
+        )
         if handled_reports:
             executed_tools.extend(r_tools)
             tool_results_text += r_text
@@ -560,7 +581,7 @@ class AIGateway:
         is_accounting_reports_intent = handled_reports
 
 
-        # 4c. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
+        # 4d. Dynamic Sales & Financial Analytics / Summary Intent (Sales, Receipts, Orders, Credit Notes)
         handled_sales, s_tools, s_text, s_reply = await handle_sales_analytics(
             last_user_message=last_user_message,
             last_msg_lower=last_msg_lower,
@@ -572,6 +593,7 @@ class AIGateway:
             is_voucher_intent=is_voucher_intent,
             is_accounting_reports_intent=is_accounting_reports_intent,
             is_cash_bank_intent=is_cash_bank_intent,
+            is_parties_intent=is_parties_intent,
         )
         if handled_sales:
             executed_tools.extend(s_tools)
@@ -580,7 +602,7 @@ class AIGateway:
                 slot_missing_reply = s_reply
         is_sales_analytics_intent = handled_sales
 
-        # 4c. Dynamic View/Lookup Voucher Intent (Fetches synced invoices/vouchers from Cloud/Tally)
+        # 4e. Dynamic View/Lookup Voucher Intent (Fetches synced invoices/vouchers from Cloud/Tally)
         handled_vlookup, vl_tools, vl_text, vl_reply = await handle_voucher_lookup(
             last_user_message=last_user_message,
             last_msg_lower=last_msg_lower,
@@ -592,6 +614,7 @@ class AIGateway:
             is_voucher_intent=is_voucher_intent,
             is_sales_analytics_intent=is_sales_analytics_intent,
             is_cash_bank_intent=is_cash_bank_intent,
+            is_parties_intent=is_parties_intent,
         )
         if handled_vlookup:
             executed_tools.extend(vl_tools)

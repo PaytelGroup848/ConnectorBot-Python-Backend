@@ -245,8 +245,28 @@ class ConnectorClient:
         """Retrieve diagnostic sync errors for troubleshooting."""
         return []
 
-    async def search_ledgers(self, company_name: str, query: str) -> List[Dict[str, Any]]:
-        """Search party ledgers in Tally."""
+    async def search_ledgers(self, company_name: str, query: str, company_id: Optional[str] = None, token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search party ledgers in Tally / CtrlBooks."""
+        active_token = token or settings.CONNECTOR_API_TOKEN
+        if active_token:
+            try:
+                parties_res = await self.get_company_parties(
+                    company_name=company_name, company_id=company_id, q=query, limit=10, token=active_token
+                )
+                if parties_res.get("success") and parties_res.get("items"):
+                    return [
+                        {
+                            "name": p["name"],
+                            "parent": "Sundry Debtors" if p["closingBalance"] >= 0 else "Sundry Creditors",
+                            "closing_balance": p["closingBalance"],
+                            "gstin": p["gstin"],
+                            "phone": p["phone"],
+                            "state": "Active",
+                        }
+                        for p in parties_res["items"]
+                    ]
+            except Exception:
+                pass
         ledger_name = query.strip().title() if query and query.strip() else "Customer Ledger"
         return [
             {
@@ -1349,6 +1369,93 @@ class ConnectorClient:
             "limit": limit,
             "total_amount": round(tot_amount, 2),
             "items": items,
+        }
+
+    async def get_company_parties(
+        self,
+        company_name: Optional[str] = None,
+        company_id: Optional[str] = None,
+        page: int = 1,
+        limit: int = 50,
+        q: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetches Parties from GET /companies/{CompanyId}/parties?page={page}&limit={limit}&q={q}."""
+        comp_details = await self.resolve_company_details(company_name=company_name, company_id=company_id, token=token)
+        resolved_cid = comp_details["company_id"]
+        effective_company = comp_details["company_name"]
+
+        # Note: API server safely caps limit at 100 per page
+        effective_limit = min(int(limit), 100) if limit else 50
+        params: Dict[str, Any] = {"page": page, "limit": effective_limit}
+        if q:
+            params["q"] = q.strip()
+
+        path = f"/companies/{resolved_cid}/parties"
+        res = await self._request("GET", path, token=token, params=params)
+
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                if isinstance(val, dict):
+                    val = val.get("$numberDecimal") or val.get("value") or default
+                if val is None or val == "":
+                    return default
+                return float(str(val).replace(",", "").strip())
+            except Exception:
+                return default
+
+        raw_items = []
+        tot_count = 0
+        if res.get("success") and res.get("data") is not None:
+            data = res.get("data")
+            if isinstance(data, dict):
+                raw_items = data.get("items") or []
+                tot_count = int(data.get("total") or len(raw_items))
+            elif isinstance(data, list):
+                raw_items = data
+                tot_count = len(raw_items)
+
+        clean_items = []
+        tot_debit = 0.0
+        tot_credit = 0.0
+
+        for it in raw_items:
+            cb = _safe_float(it.get("closingBalance") or 0.0)
+            ob = _safe_float(it.get("openingBalance") or 0.0)
+            if cb > 0:
+                tot_debit += cb
+            elif cb < 0:
+                tot_credit += abs(cb)
+
+            clean_items.append({
+                "_id": str(it.get("_id") or ""),
+                "name": str(it.get("partyName") or it.get("name") or "Party"),
+                "partyName": str(it.get("partyName") or it.get("name") or "Party"),
+                "closingBalance": cb,
+                "openingBalance": ob,
+                "gstin": str(it.get("gstin") or ""),
+                "phone": str(it.get("phone") or ""),
+                "email": str(it.get("email") or ""),
+                "address": str(it.get("address") or ""),
+                "creditLimit": _safe_float(it.get("creditLimit") or 0.0),
+                "creditDays": int(it.get("creditDays") or 0),
+                "lastSoldDate": str(it.get("lastSoldDate") or ""),
+                "tallyExternalId": str(it.get("tallyExternalId") or ""),
+            })
+
+        return {
+            "success": True,
+            "company_name": effective_company,
+            "company_id": resolved_cid,
+            "module": "parties",
+            "search_query": q,
+            "total": tot_count,
+            "page": page,
+            "limit": effective_limit,
+            "total_debit": round(tot_debit, 2),
+            "total_credit": round(tot_credit, 2),
+            "net_balance": round(tot_debit - tot_credit, 2),
+            "items": clean_items,
         }
 
     def build_tally_voucher_xml(

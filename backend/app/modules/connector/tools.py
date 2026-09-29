@@ -554,6 +554,23 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_parties_command",
+            "description": "Retrieves real-time customer and supplier party ledger balances, outstandings, GSTIN, and contact details from Tally Prime.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "q": {"type": "string", "description": "Optional party name search term (e.g. Microns, Steel, Trader)"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max parties to return (default: 50)"},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -575,7 +592,14 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
     elif tool_name == "get_my_tally_connections":
         return {"connections": await connector_client.get_tally_connections()}
     elif tool_name == "search_ledger":
-        return {"ledgers": await connector_client.search_ledgers(args.get("company_name", ""), args.get("query", ""))}
+        return {
+            "ledgers": await connector_client.search_ledgers(
+                company_name=args.get("company_name", ""),
+                query=args.get("query", ""),
+                company_id=args.get("company_id"),
+                token=args.get("connector_token"),
+            )
+        }
     elif tool_name == "search_stock_item":
         return {"items": await connector_client.search_stock_items(args.get("company_name", ""), args.get("query", ""))}
     elif tool_name == "get_company_vouchers_command":
@@ -983,6 +1007,24 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
             "page": page,
             "limit": limit,
         }
+
+    # 21. Live Parties & Customer/Supplier Module
+    elif tool_name == "get_parties_command":
+        comp_name = args.get("company_name")
+        comp_id = args.get("company_id")
+        q = args.get("q")
+        page = int(args.get("page", 1))
+        limit = int(args.get("limit", 50))
+        token = args.get("connector_token")
+
+        return await connector_client.get_company_parties(
+            company_name=comp_name,
+            company_id=comp_id,
+            page=page,
+            limit=limit,
+            q=q,
+            token=token,
+        )
 
     else:
         return {"error": f"Tool '{tool_name}' is not recognized or permitted."}
