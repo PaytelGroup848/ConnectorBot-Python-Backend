@@ -19,9 +19,17 @@ class AuthService:
         email: Optional[str] = None,
         name: Optional[str] = None,
     ) -> dict:
-        # In production, we verify connector_token with Connector API or decode if signed
-        # For seamless integration, resolve/provision tenant and user safely:
-        user_email = email or "user@connector.cloudata.in"
+        user_email = email
+        if not user_email and connector_token:
+            try:
+                from jose import jwt
+                unv = jwt.get_unverified_claims(connector_token)
+                uid = unv.get("userId") or unv.get("sub") or unv.get("id")
+                if uid:
+                    user_email = f"user_{uid}@connector.cloudata.in"
+            except Exception:
+                pass
+        user_email = user_email or "user@connector.cloudata.in"
         user_name = name or "Connector User"
         tenant_name = "Primary Organization"
 

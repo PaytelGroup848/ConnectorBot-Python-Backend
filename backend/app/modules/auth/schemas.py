@@ -4,7 +4,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 class SessionExchangeRequest(BaseModel):
     connector_token: str = Field(..., description="Connector auth token / session key to exchange")
-    email: Optional[EmailStr] = Field(None, description="Optional verified email")
+    email: Optional[str] = Field(None, description="Optional verified email")
     name: Optional[str] = Field(None, description="Optional user name")
 
 
