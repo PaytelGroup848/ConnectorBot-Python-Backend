@@ -14,8 +14,29 @@ PARTY_STOP_WORDS = {
     "all", "sab", "sabhi", "pure", "dono", "har", "aaj", "kal", "today", "yesterday", "bank", "cash",
     "daybook", "reports", "report", "tally", "ctrlbooks", "company", "firm", "details", "detail",
     "balance", "closing", "opening", "outstanding", "hisab", "kitab", "kiska", "kis", "bhai", "please",
-    "plz", "batao", "dikhao", "check", "karo", "status", "hai", "kya", "list", "total", "ka", "ki", "ke", "ko", "se"
+    "plz", "batao", "dikhao", "check", "karo", "status", "hai", "kya", "list", "total", "ka", "ki", "ke", "ko", "se",
+    "party", "parties", "customer", "customers", "vendor", "vendors", "supplier", "suppliers", "client", "clients",
+    "debtor", "debtors", "creditor", "creditors", "khata", "khate", "ledger", "ledgers", "bataiye", "dikhaye", "chahiye"
 }
+
+
+def _clean_and_validate_party_candidate(cand: Optional[str]) -> Optional[str]:
+    """Validates extracted candidate name, stripping noise words and ensuring it's not a generic query."""
+    if not cand:
+        return None
+    c = cand.strip()
+    c = re.sub(r"^(?:bhai|bro|please|plz|mera|mere|meri|apna|apne|apni|the|in|is|us|ye|of|for)\s+", "", c, flags=re.IGNORECASE).strip()
+    c = re.sub(r"\s+(?:ka|ki|ke|ko|se|hai|kya|batao|dikhao|dikhaye|chahiye|karo)$", "", c, flags=re.IGNORECASE).strip()
+    words = [w.lower() for w in re.findall(r"[a-zA-Z0-9]+", c)]
+    if not words or all(w in PARTY_STOP_WORDS for w in words):
+        return None
+    while words and words[0] in PARTY_STOP_WORDS:
+        c = re.sub(r"^\S+\s*", "", c).strip()
+        words = [w.lower() for w in re.findall(r"[a-zA-Z0-9]+", c)]
+    while words and words[-1] in PARTY_STOP_WORDS:
+        c = re.sub(r"\s*\S+$", "", c).strip()
+        words = [w.lower() for w in re.findall(r"[a-zA-Z0-9]+", c)]
+    return c if len(c) >= 2 else None
 
 
 def extract_party_search_term(query_text: str) -> Optional[str]:
@@ -29,10 +50,8 @@ def extract_party_search_term(query_text: str) -> Optional[str]:
         re.IGNORECASE,
     )
     if m_a:
-        cand = m_a.group(1).strip()
-        cand = re.sub(r"^(?:bhai|bro|please|plz|mera|mere|meri|apna|apne|apni|the|in|is|us|ye)\s+", "", cand, flags=re.IGNORECASE).strip()
-        cand = re.sub(r"\s+(?:ka|ki|ke|ko|se)$", "", cand, flags=re.IGNORECASE).strip()
-        if cand.lower() not in PARTY_STOP_WORDS and len(cand) >= 2:
+        cand = _clean_and_validate_party_candidate(m_a.group(1))
+        if cand:
             return cand
 
     # Pattern B: party / customer / vendor / ledger <cand> [ka / ki / ke / balance ...]
@@ -42,10 +61,8 @@ def extract_party_search_term(query_text: str) -> Optional[str]:
         re.IGNORECASE,
     )
     if m_b:
-        cand = m_b.group(1).strip()
-        cand = re.sub(r"^(?:bhai|bro|please|plz|mera|mere|meri|apna|apne|apni|the|in|is|us|ye|of|for)\s+", "", cand, flags=re.IGNORECASE).strip()
-        cand = re.sub(r"\s+(?:ka|ki|ke|ko|se)$", "", cand, flags=re.IGNORECASE).strip()
-        if cand.lower() not in PARTY_STOP_WORDS and len(cand) >= 2:
+        cand = _clean_and_validate_party_candidate(m_b.group(1))
+        if cand:
             return cand
 
     # Pattern C: <cand> ka balance / ledger / details
@@ -55,9 +72,8 @@ def extract_party_search_term(query_text: str) -> Optional[str]:
         re.IGNORECASE,
     )
     if m_c:
-        cand = m_c.group(1).strip()
-        cand = re.sub(r"^(?:bhai|bro|please|plz|mera|mere|apna|apne|is)\s+", "", cand, flags=re.IGNORECASE).strip()
-        if cand.lower() not in PARTY_STOP_WORDS and len(cand) >= 2:
+        cand = _clean_and_validate_party_candidate(m_c.group(1))
+        if cand:
             return cand
 
     # Pattern D: "parties matching XYZ", "search party XYZ", "ledger of XYZ", "balance of XYZ"
@@ -67,8 +83,8 @@ def extract_party_search_term(query_text: str) -> Optional[str]:
         re.IGNORECASE,
     )
     if m_d:
-        cand = m_d.group(1).strip()
-        if cand.lower() not in PARTY_STOP_WORDS and len(cand) >= 2:
+        cand = _clean_and_validate_party_candidate(m_d.group(1))
+        if cand:
             return cand
 
     return None

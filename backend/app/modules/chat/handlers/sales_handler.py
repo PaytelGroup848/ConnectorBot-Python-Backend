@@ -165,21 +165,73 @@ async def handle_sales_analytics(
                 slot_missing_reply += f"**Top Transactions:**\n{top_items_txt}\n"
             slot_missing_reply += "Aapke liye interactive live summary card niche ready hai, jise aap direct WhatsApp par share kar sakte hain!"
     else:
-        if lang_code == "en-IN":
-            slot_missing_reply = (
-                f"ℹ️ In **{effective_company}**, no {module_name.lower()} records were found for **{period_label}** (Total: ₹0.00).\n\n"
-                f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime? (e.g. *'Create sales invoice for {sample_party} of ₹15,000'*)"
+        # Resilient real context fallback: If specific period (e.g. Aaj) has 0 records,
+        # fetch the latest module records so user gets genuine data and insights
+        recent_items = []
+        overall_total = 0.0
+        overall_count = 0
+        try:
+            recent_data = await connector_client.get_company_sales_module(
+                endpoint_suffix=target_module,
+                company_name=effective_company,
+                company_id=effective_company_id,
+                q=search_q,
+                from_date=None,
+                to_date=None,
+                page=1,
+                limit=3,
+                token=caller.get("connector_token"),
             )
-        elif lang_code == "hi-IN":
-            slot_missing_reply = (
-                f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई {module_name.lower()} रिकॉर्ड नहीं मिला (कुल: ₹0.00)।\n\n"
-                f"क्या आप नया वाउचर बनाना चाहते हैं? (जैसे: *'{sample_party} के लिए 15,000 का सेल्स इनवॉइस बना दो'*)"
-            )
+            recent_items = recent_data.get("items", [])
+            overall_total = float(recent_data.get("total_amount") or 0.0)
+            overall_count = int(recent_data.get("total_count") or len(recent_items))
+        except Exception:
+            pass
+
+        if recent_items:
+            latest_v = recent_items[0]
+            v_no = latest_v.get("voucher_number", "VCH")
+            p_name = latest_v.get("party_ledger", "Customer")
+            amt_val = latest_v.get("amount", 0.0)
+            d_val = latest_v.get("date", "")
+
+            if lang_code == "en-IN":
+                slot_missing_reply = (
+                    f"ℹ️ In **{effective_company}**, no new {module_name.lower()} entries were recorded for **{period_label}** (Total: ₹0.00).\n\n"
+                    f"• **Overall {module_name} in Tally**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
+                    f"• **Latest Recorded {module_name}**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f} on {d_val})\n\n"
+                    f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime?"
+                )
+            elif lang_code == "hi-IN":
+                slot_missing_reply = (
+                    f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई नई {module_name.lower()} एंट्री नहीं मिली (कुल: ₹0.00)।\n\n"
+                    f"• **Tally में कुल {module_name}**: **₹{overall_total:,.2f}** ({overall_count} रिकॉर्ड)\n"
+                    f"• **नवीनतम (Latest) वाउचर**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f}, दिनांक {d_val})\n\n"
+                    f"क्या आप नया वाउचर पोस्ट करना चाहते हैं?"
+                )
+            else:
+                slot_missing_reply = (
+                    f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi nayi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
+                    f"• **Tally me Kul {module_name}**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
+                    f"• **Latest {module_name} Entry**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f}, {d_val} ko)\n\n"
+                    f"Kya aap naya voucher banana chahte hain ya pichla record dekhna chahte hain?"
+                )
         else:
-            slot_missing_reply = (
-                f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
-                f"Agar aapko naya voucher banana hai, toh boliye main abhi Tally me post kar deta hoon! (e.g. *'{sample_party} ke liye 15,000 ka sales invoice bana do'*)"
-            )
+            if lang_code == "en-IN":
+                slot_missing_reply = (
+                    f"ℹ️ In **{effective_company}**, no {module_name.lower()} records were found for **{period_label}** (Total: ₹0.00).\n\n"
+                    f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime?"
+                )
+            elif lang_code == "hi-IN":
+                slot_missing_reply = (
+                    f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई {module_name.lower()} रिकॉर्ड नहीं मिला (कुल: ₹0.00)।\n\n"
+                    f"क्या आप नया वाउचर बनाना चाहते हैं?"
+                )
+            else:
+                slot_missing_reply = (
+                    f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
+                    f"Agar aapko naya voucher banana hai, toh batayein main abhi Tally me post kar deta hoon!"
+                )
 
     return True, executed_tools, tool_results_text, slot_missing_reply
 

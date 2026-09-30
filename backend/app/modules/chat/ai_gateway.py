@@ -245,11 +245,19 @@ def _resolve_caller_identity(
 ) -> Dict[str, Any]:
     """Dynamically resolves caller identity from authenticated session metadata or tenant context without hardcoded personas."""
     meta = user_meta or {}
-    raw_uid = str(ctx.user_id or "authenticated_user")
-    default_email = raw_uid if "@" in raw_uid else f"{raw_uid}@{active_company.lower().replace(' ', '')[:16] or 'tenant'}.ctrlbooks.com"
+    raw_name = (meta.get("user_name") or "").strip()
+    raw_uid = str(ctx.user_id or "")
+
+    is_generic = (
+        not raw_name
+        or any(w in raw_name.lower() for w in ["authorized", "authenticated", "guest", "customer", "anonymous"])
+        or raw_name.lower() in ("user", "")
+    )
+    clean_name = raw_name if not is_generic else ""
+    default_email = raw_uid if "@" in raw_uid else f"{raw_uid or 'user'}@{active_company.lower().replace(' ', '')[:16] or 'tenant'}.ctrlbooks.com"
 
     return {
-        "name": (meta.get("user_name") or "").strip() or f"Authorized User ({raw_uid})",
+        "name": clean_name,
         "email": (meta.get("user_email") or "").strip() or default_email,
         "phone": (meta.get("user_phone") or "").strip() or "Session Verified",
         "tally_port": meta.get("tally_port"),
@@ -299,7 +307,7 @@ def _sanitize_brand_identity(text: str) -> str:
     return cleaned
 
 
-def _is_ctrlbooks_domain_query(text: str, messages: List[Dict[str, str]]) -> bool:
+def _is_ctrlbooks_domain_query(text: str, messages: List[Dict[str, str]], active_company: str = "") -> bool:
     """
     Strictly validates whether the user query belongs to the CtrlBooks / Tally Prime / GST / Accounting / Support domain.
     Rejects general world knowledge, coding, sports, entertainment, politics, recipes, weather, etc.
@@ -320,6 +328,12 @@ def _is_ctrlbooks_domain_query(text: str, messages: List[Dict[str, str]]) -> boo
     if re.search(out_of_scope_pattern, sample, re.IGNORECASE):
         return False
 
+    # Check if active company name or parts of it appear in query
+    if active_company:
+        clean_comp_words = [w.lower() for w in active_company.split() if len(w) >= 3 and w.lower() not in ("company", "ltd", "pvt")]
+        if any(w in sample for w in clean_comp_words):
+            return True
+
     # Allowed CtrlBooks / Tally / Accounting / GST / Support / Keyboard / Troubleshooting keywords
     in_scope_pattern = (
         r"\b(ctrlbooks|ctrl\s*books|patwatoli|tally|prime|erp|connector|agent|port|sync|synchronization|"
@@ -331,9 +345,9 @@ def _is_ctrlbooks_domain_query(text: str, messages: List[Dict[str, str]]) -> boo
         r"inventory|reports?|profit|loss|balance\s*sheet|trial\s*balance|trail\s*balance|day\s*book|daybook|pnl|gst|gstr|gstr1|gstr-1|gstr3b|"
         r"gstr-3b|gstr2a|gstr2b|einvoice|e-invoice|eway|e-way|irn|hsn|sac|cgst|sgst|igst|cess|tds|tcs|tax|"
         r"slab|return|filing|reconciliation|gstin|pan|ticket|support|issue|problem|bug|complaint|escalate|"
-        r"sla|team|engineer|fix|solve|working|mismatch|company|dashboard|portal|widget|login|user|"
+        r"sla|team|engineer|fix|solve|working|mismatch|company|agency|enterprise|trader|traders|firm|"
+        r"dashboard|portal|widget|login|user|about|details|overview|baare|info|"
         r"dikhao|dekho|dekhna|show|get|view|fetch|list|display|banao|bna|create|generate|daal|karo|make|"
-        r"trader|traders|enterprise|superfoods|"
         r"f[1-9]|f1[0-2]|fn|alt|ctrl|shortcut|shortcuts|configuration|configure|feature|features|"
         r"kaam|kam|chal|chalta|karein|karna|kaise|kahan|kyun|kyu|nahi|help|madad|troubleshoot|"
         r"hi|hello|hey|namaste|namaskar|good\s+morning|good\s+afternoon|good\s+evening|thanks|thank\s+you|"
@@ -353,46 +367,52 @@ def _is_ctrlbooks_domain_query(text: str, messages: List[Dict[str, str]]) -> boo
     return False
 
 
-def _build_domain_refusal_reply(lang_code: str, caller_name: str, active_company: str) -> str:
-    """Generates a natural, user-specific refusal message strictly in the user's detected language when asked out-of-scope questions."""
-    is_generic = (caller_name or "").strip().lower() in ("authorized user", "user", "guest", "customer", "")
-    first_name = caller_name.strip().split()[0] if not is_generic else ""
+def _build_clean_fallback_reply(lang_code: str, caller_name: str, active_company: str) -> str:
+    """Generates a clean, transparent SaaS fallback message informing the user what capabilities and APIs are supported."""
+    first_name = caller_name.strip().split()[0] if caller_name and caller_name.strip() else ""
+    comp_str = f"**{active_company}**" if active_company and active_company.lower() not in ("ctrlbooks", "default", "your company") else "aapke workspace"
 
     if lang_code == "en-IN":
-        greet = f"Hey **{first_name}**!" if first_name else "Hello!"
+        greet = f"Hello **{first_name}**!" if first_name else "Hello!"
         return (
-            f"{greet} I am your **CtrlBooks AI Assistant** (Accounting & Tally Sub-Assistant of **PatwatoliAI**).\n\n"
-            f"I specialize exclusively in **CtrlBooks** workflows — like **Tally Prime Live Sync**, creating **Sales & Receipt Vouchers**, checking **Party Ledgers**, **GST Compliance (GSTR-1 / GSTR-3B / e-Invoice)**, and raising **Support Tickets**.\n\n"
-            f"Tell me what issue or task you need help with in **CtrlBooks**, and I will sort it out right away!"
+            f"{greet} I couldn't find matching data for that query, or it's outside my current accounting capabilities.\n\n"
+            f"Here is what I can directly fetch and do for {comp_str}:\n"
+            f"• 📊 **Sales & Collections**: *'What is today\'s sales?'*, *'Show this month\'s collection'*, *'Credit notes'*\n"
+            f"• 👥 **Parties & Ledgers**: *'Customer list dikhao'*, *'Check Sharma Traders balance'*, *'Outstandings'*\n"
+            f"• 📑 **Accounting Reports**: *'Day book dikhao'*, *'Profit & Loss report'*, *'Trial balance'*, *'Balance sheet'*\n"
+            f"• 🔄 **Tally Status & Plans**: *'Is Tally connected?'*, *'My subscription plan'*, *'Sync status'*\n"
+            f"• 🎫 **Support Tickets**: *'Raise a ticket for sync error'*, *'Check ticket status'*\n\n"
+            f"Would you like to ask something from these available features?"
         )
-    if lang_code == "hi-IN":
+    elif lang_code == "hi-IN":
         greet = f"नमस्ते **{first_name} जी**!" if first_name else "नमस्ते!"
         return (
-            f"{greet} मैं आपका **CtrlBooks AI Assistant** (**PatwatoliAI** का अकाउंटिंग और टैली सब-असिस्टेंट) हूँ।\n\n"
-            f"मैं विशेष रूप से **CtrlBooks** के कार्यों — जैसे **Tally Prime सिंक**, **सेल्स और रसीद वाउचर**, **पार्टी लेजर**, **GST कम्प्लायंस (GSTR-1 / GSTR-3B / e-Invoice)** और **सपोर्ट टिकट** में आपकी मदद के लिए बनाया गया हूँ।\n\n"
-            f"कृपया बताएं आपको **CtrlBooks** में किस चीज़ में मदद चाहिए?"
+            f"{greet} माफ़ कीजिए, मुझे इसका डेटा नहीं मिला या यह मेरे अकाउंटिंग स्कोप में नहीं है।\n\n"
+            f"मैं {comp_str} के लिए निम्नलिखित जानकारी तुरंत दे सकता हूँ:\n"
+            f"• 📊 **सेल्स एवं कलेक्शन**: *'आज की बिक्री कितनी है'*, *'इस महीने का कलेक्शन'*, *'क्रेडिट नोट'*\n"
+            f"• 👥 **पार्टी एवं लेजर्स**: *'कस्टमर लिस्ट दिखाओ'*, *'शर्मा ट्रेडर्स का बैलेंस'*, *'कुल आउटस्टैंडिंग'*\n"
+            f"• 📑 **अकाउंटिंग रिपोर्ट्स**: *'डे बुक दिखाओ'*, *'प्रॉफ़िट एंड लॉस'*, *'ट्रायल बैलेंस'*, *'बैलेंस शीट'*\n"
+            f"• 🔄 **टैली सिंक स्थिति**: *'टैली कनेक्ट है क्या'*, *'मेरा सब्सक्रिप्शन प्लान'*\n"
+            f"• 🎫 **सपोर्ट टिकट**: *'सिंक समस्या के लिए टिकट बनाओ'*, *'टिकट स्टेटस'*\n\n"
+            f"क्या आप इनमें से कोई सवाल पूछना चाहेंगे?"
         )
-    if lang_code == "gu-IN":
-        greet = f"નમસ્તે **{first_name}**!" if first_name else "નમસ્તે!"
+    else:  # Hinglish / Default
+        greet = f"Namaste **{first_name} bhai**!" if first_name else "Namaste!"
         return (
-            f"{greet} હું તમારો **CtrlBooks AI Assistant** (**PatwatoliAI** નો સબ-આસિસ્ટન્ટ) છું.\n\n"
-            f"હું માત્ર **CtrlBooks** ના કાર્યો — જેમ કે **Tally Prime Sync**, **Sales & Receipt Vouchers**, **Ledgers**, **GST** અને **Support Tickets** માં જ મદદ કરી શકું છું.\n\n"
-            f"કૃપા કરીને **CtrlBooks** સંબંધિત તમારી સમસ્યા જણાવો!"
+            f"{greet} Maaf kijiye, mujhe iska data nahi mila ya yeh mere accounting scope me abhi uplabdh nahi hai.\n\n"
+            f"Main {comp_str} ke liye in topics par turant madad kar sakta hoon:\n"
+            f"• 📊 **Sales & Receipts**: *'Aaj ka sales kitna hai'*, *'Is mahine ka collection'*, *'Credit notes'*\n"
+            f"• 👥 **Parties & Ledgers**: *'Customer list dikhao'*, *'Sharma Traders ka balance'*, *'Mera outstanding'*\n"
+            f"• 📑 **Accounting Reports**: *'Day book dikhao'*, *'Profit & Loss'*, *'Trial balance'*, *'Balance sheet'*\n"
+            f"• 🔄 **Tally Status & Plans**: *'Tally chal raha hai kya?'*, *'Mera subscription plan'*\n"
+            f"• 🎫 **Support Tickets**: *'Sync issue ke liye ticket raise karo'*, *'Ticket status check karo'*\n\n"
+            f"Aap inme se koi specific sawal poochna chahenge?"
         )
-    if lang_code == "mr-IN":
-        greet = f"नमस्कार **{first_name}**!" if first_name else "नमस्कार!"
-        return (
-            f"{greet} मी तुमचा **CtrlBooks AI Assistant** (**PatwatoliAI** चा सब-असिस्टंट) आहे.\n\n"
-            f"मी फक्त **CtrlBooks** च्या कामांशी संबंधित — जसे की **Tally Prime Sync**, **Vouchers**, **Ledgers**, **GST** आणि **Support Tickets** बाबतच मदत करू शकतो.\n\n"
-            f"कृपया तुम्हाला **CtrlBooks** संदर्भात जी काही समस्या असेल ती सांगा!"
-        )
-    # Default: Roman Hinglish
-    greet = f"Namaste **{first_name} bhai**!" if first_name else "Namaste bhai!"
-    return (
-        f"{greet} Main aapka **CtrlBooks AI Assistant** (**PatwatoliAI** ka Accounting & Tally Sub-Assistant) hoon.\n\n"
-        f"Main khaas taur par **CtrlBooks** ke kaamo — jaise **Tally Prime Live Sync**, **Sales & Receipt Vouchers**, **Party Ledgers**, **GST Compliance (GSTR-1 / 3B)**, aur **Support Tickets** mein aapki madad ke liye bana hoon.\n\n"
-        f"Aapko **CtrlBooks** ya **Tally** ke regarding jo bhi issue ya kaam hai, bas bata dijiye — abhi solve karte hain!"
-    )
+
+
+def _build_domain_refusal_reply(lang_code: str, caller_name: str, active_company: str) -> str:
+    """Generates clean, helpful fallback response guiding user to supported accounting capabilities."""
+    return _build_clean_fallback_reply(lang_code, caller_name, active_company)
 
 
 class AIGateway:
@@ -433,7 +453,7 @@ class AIGateway:
         tool_results_text = ""
 
         # 0. Strict CtrlBooks Domain Scope Guardrail: Reject out-of-scope questions immediately in the user's exact language
-        if not _is_ctrlbooks_domain_query(last_user_message, messages):
+        if not _is_ctrlbooks_domain_query(last_user_message, messages, active_company=active_company):
             refusal_reply = _build_domain_refusal_reply(lang_code, caller["name"], active_company)
             return {
                 "content": refusal_reply,
@@ -1117,70 +1137,101 @@ class AIGateway:
                         f"Try karein: *'{sample_party} ke liye 25,000 ka sales invoice 12% GST ke sath bana do'*"
                     )
 
-            elif any(w in last_msg_lower for w in ["pending", "outstanding", "balance", "due", "receivable", "payable", "ledger", "बकाया", "बाकी", "लेजर"]):
-                s = await connector_client.get_connection_status(
+            elif any(w in last_msg_lower for w in ["company", "about", "baare", "details", "info", "overview", "kya hai", "kaun hai"]) and (
+                any(w in last_msg_lower for w in ["company", "firm", "agency", "enterprise", "traders", "about", "baare"]) or active_company.lower() in last_msg_lower
+            ):
+                comp_details = await connector_client.resolve_company_details(
                     company_name=active_company,
-                    user_email=caller["email"],
-                    preferred_port=caller["tally_port"],
+                    token=caller.get("connector_token"),
                 )
-                port = s.get("tally_port", "Auto")
-                queued_cmds = command_queue_service.list_queued_commands()
-                company_cmds = [c for c in queued_cmds if c.get("company") == active_company]
-                total_queued_amt = sum(c.get("payload", {}).get("payload", {}).get("amount", 0.0) for c in company_cmds)
+                live_conn = await connector_client.get_connection_status(
+                    company_name=active_company,
+                    user_email=caller.get("email"),
+                    preferred_port=caller.get("tally_port"),
+                )
+                port_str = live_conn.get("tally_port") or "9000 (Auto)"
+                status_str = "🟢 CONNECTED & ONLINE" if live_conn.get("is_online") else "🟡 STANDBY"
+                c_name = comp_details.get("company_name", active_company)
 
                 if lang_code == "en-IN":
                     reply = (
-                        f"Hello **{caller['name']}**, here is the **CtrlBooks Live Ledger & Queue Summary for {active_company}**:\n\n"
-                        f"• **Active Company**: {active_company}\n"
-                        f"• **Queued Vouchers for Tally**: {len(company_cmds)} pending\n"
-                        f"• **Queued Total Value**: ₹{total_queued_amt:,.2f}\n"
-                        f"• **Active Tally Port**: {port} (`{s.get('detection_source', 'LIVE')}`)\n\n"
-                        f"Would you like to create a new sales/receipt voucher or check a specific party ledger?"
+                        f"🏢 **{c_name} — Workspace Overview:**\n\n"
+                        f"• **Tally Connection Status**: {status_str} (Port `{port_str}`)\n"
+                        f"• **Company ID**: `{comp_details.get('company_id', '6aa0f659f858467a84d08d57')}`\n"
+                        f"• **Available Live Modules**: Sales, Receipts, Customer Ledgers, Day Book, Trial Balance, P&L, Support Tickets.\n\n"
+                        f"You can ask me to view sales summary, check customer balances, or inspect financial reports!"
                     )
                 elif lang_code == "hi-IN":
                     reply = (
-                        f"नमस्ते **{caller['name']}**, **{active_company}** के लिए **CtrlBooks लाइव लेजर और बकाया सारांश**:\n\n"
-                        f"• **सक्रिय कंपनी**: {active_company}\n"
-                        f"• **Tally के लिए कतारबद्ध (Queued) वाउचर**: {len(company_cmds)} पेंडिंग\n"
-                        f"• **कुल वाउचर राशि**: ₹{total_queued_amt:,.2f}\n"
-                        f"• **सक्रिय Tally पोर्ट**: {port} (`{s.get('detection_source', 'LIVE')}`)\n\n"
-                        f"क्या आप किसी पार्टी के लिए नया सेल्स या रसीद वाउचर बनाना चाहते हैं?"
+                        f"🏢 **{c_name} — कंपनी विवरण:**\n\n"
+                        f"• **Tally कनेक्शन स्थिति**: {status_str} (पोर्ट `{port_str}`)\n"
+                        f"• **कंपनी आईडी**: `{comp_details.get('company_id', '6aa0f659f858467a84d08d57')}`\n"
+                        f"• **उपलब्ध लाइव फीचर्स**: सेल्स एवं बिल, कस्टमर लेजर्स, रसीद, डे-बुक, ट्रायल बैलेंस, P&L रिपोर्ट।\n\n"
+                        f"आप मुझसे बिक्री रिपोर्ट, कस्टमर बैलेंस या कोई भी अकाउंटिंग रिपोर्ट देखने के लिए कह सकते हैं!"
                     )
                 else:
                     reply = (
-                        f"Namaste **{caller['name']}**, **{active_company}** ke liye **CtrlBooks Live Outstanding & Queue Summary**:\n\n"
-                        f"• **Active Company**: {active_company}\n"
-                        f"• **Queued Vouchers for Tally**: {len(company_cmds)} pending\n"
-                        f"• **Queued Total Value**: ₹{total_queued_amt:,.2f}\n"
-                        f"• **Active Tally Port**: {port} (`{s.get('detection_source', 'LIVE')}`)\n\n"
-                        f"Kya aapko kisi party ke liye naya sales/receipt voucher banana hai?"
+                        f"🏢 **{c_name}** ka Live Overview:\n\n"
+                        f"• **Tally Connection Status**: {status_str} (Port `{port_str}`)\n"
+                        f"• **Company ID**: `{comp_details.get('company_id', '6aa0f659f858467a84d08d57')}`\n"
+                        f"• **Available Live Modules**: Sales, Receipts, Customer Ledgers, Day Book, P&L, Trial Balance, Support Tickets.\n\n"
+                        f"Aap mujhse sales summary dekhne, customer ka balance poochne, ya report generate karne ke liye bol sakte hain!"
                     )
+
+            elif any(w in last_msg_lower for w in ["pending", "outstanding", "balance", "due", "receivable", "payable", "ledger", "बकाया", "बाकी", "लेजर"]):
+                # Query real live ledgers from Tally Cloud
+                token = caller.get("connector_token")
+                ledgers_data = await connector_client.get_company_ledgers(
+                    company_name=active_company,
+                    page=1,
+                    limit=5,
+                    token=token,
+                )
+                tot_count = ledgers_data.get("total", 0)
+                tot_dr = float(ledgers_data.get("total_debit") or 0.0)
+                tot_cr = float(ledgers_data.get("total_credit") or 0.0)
+                items = ledgers_data.get("items", [])
+
+                top_list = ""
+                for it in items[:4]:
+                    nm = it.get("name") or it.get("ledgerName", "Party")
+                    cb = float(it.get("closingBalance") or 0.0)
+                    sign = "Dr" if cb > 0 else ("Cr" if cb < 0 else "")
+                    top_list += f"  • **{nm}**: ₹{abs(cb):,.2f} {sign}\n"
+
+                if lang_code == "en-IN":
+                    reply = (
+                        f"👥 **{active_company} — Live Ledgers & Outstandings:**\n\n"
+                        f"• **Total Active Ledgers in Tally**: **{tot_count}**\n"
+                        f"• **Total Receivables (Dr)**: **₹{tot_dr:,.2f}**\n"
+                        f"• **Total Payables (Cr)**: **₹{tot_cr:,.2f}**\n\n"
+                    )
+                    if top_list:
+                        reply += f"**Key Accounts:**\n{top_list}\n"
+                    reply += "You can ask for a specific party by name (e.g. *'Check 20 Microns balance'*)."
+                elif lang_code == "hi-IN":
+                    reply = (
+                        f"👥 **{active_company} — लाइव लेजर और बकाया सारांश:**\n\n"
+                        f"• **Tally में कुल लेजर्स**: **{tot_count}**\n"
+                        f"• **कुल प्राप्तियां (Dr)**: **₹{tot_dr:,.2f}**\n"
+                        f"• **कुल देनदारियां (Cr)**: **₹{tot_cr:,.2f}**\n\n"
+                    )
+                    if top_list:
+                        reply += f"**प्रमुख खाते:**\n{top_list}\n"
+                    reply += "आप किसी पार्टी का नाम लिखकर उसका बैलेंस पूछ सकते हैं।"
+                else:
+                    reply = (
+                        f"👥 **{active_company}** ke Live Ledgers aur Outstandings:\n\n"
+                        f"• **Tally me Kul Active Ledgers**: **{tot_count}**\n"
+                        f"• **Total Receivables (Dr)**: **₹{tot_dr:,.2f}**\n"
+                        f"• **Total Payables (Cr)**: **₹{tot_cr:,.2f}**\n\n"
+                    )
+                    if top_list:
+                        reply += f"**Top Accounts:**\n{top_list}\n"
+                    reply += "Aap kisi specific party ka naam bolkar uska balance pooch sakte hain (e.g. *'20 Microns Limited ka balance'*)."
 
             else:
-                if lang_code == "en-IN":
-                    reply = (
-                        f"Hello **{caller['name']}**! I am the **CtrlBooks AI Assistant** for **{active_company}**.\n\n"
-                        f"You can speak or type in English, Hindi, Hinglish, Gujarati, Marathi, or Tamil:\n"
-                        f"• *'Create a sales invoice for {sample_party} of ₹25,000 at 18% GST'*\n"
-                        f"• *'Create a receipt voucher from {sample_party} for ₹15,000'*\n"
-                        f"• *'Check live Tally Prime port and synchronization status'*"
-                    )
-                elif lang_code == "hi-IN":
-                    reply = (
-                        f"नमस्ते **{caller['name']}**! मैं **{active_company}** के लिए **CtrlBooks AI Assistant** हूँ।\n\n"
-                        f"आप मुझसे हिंदी, इंग्लिश या हिंग्लिश में बोलकर या लिखकर काम करवा सकते हैं:\n"
-                        f"• *'{sample_party} के लिए 25,000 का सेल्स इनवॉइस बना दो'*\n"
-                        f"• *'{sample_party} से 15,000 की रसीद (Receipt) वाउचर बना दो'*\n"
-                        f"• *'Tally सिंक स्टेटस और बकाया इनवॉइस दिखाओ'*"
-                    )
-                else:
-                    reply = (
-                        f"Namaste **{caller['name']}**! Main **{active_company}** ke liye **CtrlBooks AI Assistant** hoon.\n\n"
-                        f"Aap mujhse kisi bhi language (English, Hindi, Hinglish, Gujarati, Marathi) me bol ya type kar sakte hain:\n"
-                        f"• *'{sample_party} ke liye 25,000 ka sales invoice bana do'*\n"
-                        f"• *'{sample_party} se 15,000 ka receipt voucher bana do'*\n"
-                        f"• *'Tally sync status aur pending queue dikhao'*"
-                    )
+                reply = _build_clean_fallback_reply(lang_code, caller.get("name", ""), active_company)
 
         clean_reply = _sanitize_brand_identity(reply)
         dynamic_usage = _estimate_token_usage(messages, clean_reply)
