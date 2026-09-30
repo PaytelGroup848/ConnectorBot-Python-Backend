@@ -87,6 +87,20 @@ async def get_current_tenant_context(
     return context
 
 
+async def get_widget_or_tenant_context(
+    request: Request,
+    context: Optional[TenantContext] = Depends(get_optional_tenant_context),
+) -> TenantContext:
+    """Resolves authenticated tenant or falls back to valid context for customer widget tickets."""
+    if context:
+        return context
+    return TenantContext(
+        user_id="1e336198-e0dc-4ede-bf84-20165e022c67",
+        tenant_id="3733647b-374b-404a-8dc8-382b7de1abd3",
+        role="GUEST",
+    )
+
+
 def require_roles(allowed_roles: List[str]):
     """Role-based authorization dependency enforcing server-side permissions."""
     async def role_checker(
