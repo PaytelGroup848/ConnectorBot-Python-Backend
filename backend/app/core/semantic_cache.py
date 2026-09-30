@@ -22,7 +22,12 @@ class SemanticAICache:
         union = len(tokens1.union(tokens2))
         return intersection / union if union > 0 else 0.0
 
-    async def get_match(self, query: str) -> Optional[Dict[str, Any]]:
+    async def get_match(
+        self,
+        query: str,
+        tenant_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         query_tokens = self._tokenize(query)
         if not query_tokens:
             return None
@@ -34,6 +39,12 @@ class SemanticAICache:
         for entry in self._cache_entries:
             if entry["expiry"] < now:
                 continue
+            # Multi-Tenant Isolation: Ensure cache matches the exact tenant and company
+            if tenant_id and entry.get("tenant_id") and entry.get("tenant_id") != tenant_id:
+                continue
+            if company_id and entry.get("company_id") and entry.get("company_id") != company_id:
+                continue
+
             sim = self._calculate_similarity(query_tokens, entry["tokens"])
             if sim > best_score and sim >= self.threshold:
                 best_score = sim
@@ -49,7 +60,14 @@ class SemanticAICache:
             }
         return None
 
-    async def store_match(self, query: str, response: str, tool_calls: Optional[List[Dict[str, Any]]] = None):
+    async def store_match(
+        self,
+        query: str,
+        response: str,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        tenant_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+    ):
         query_tokens = self._tokenize(query)
         if not query_tokens or len(query_tokens) < 3:
             return
@@ -60,6 +78,8 @@ class SemanticAICache:
             "tokens": query_tokens,
             "response": response,
             "tool_calls": tool_calls or [],
+            "tenant_id": tenant_id,
+            "company_id": company_id,
             "timestamp": now,
             "expiry": now + self.ttl,
         })

@@ -90,17 +90,29 @@ class ChatService:
         self.db.add(user_msg)
         await self.db.flush()
 
-        # 3. SEMANTIC CACHE CHECK (Only for non-mutation / informational queries)
+        # 3. SEMANTIC CACHE CHECK (Strict Multi-Tenant Isolation)
+        # All dynamic business queries (sales, invoices, ledgers, vouchers, balance, tickets, connector)
+        # MUST ALWAYS bypass cache to guarantee fresh live data and zero cross-user leakage.
         import re
-        is_mutation_cmd = bool(
+        effective_company_id = (user_meta or {}).get("company_id")
+        is_dynamic_business_or_mutation_query = bool(
             re.search(
-                r"(voucher|invoice|bill|receipt|entry|ledger|ticket|complaint|टिकट|शिकायत).*?(bana|create|generate|daal|karo|kaat|raise|open|बना)|(bana|create|generate|daal|karo|kaat|raise|open|बना).*?(voucher|invoice|bill|receipt|entry|ledger|ticket|complaint|टिकट|शिकायत)|\b(ticket|complaint|टिकट)\b",
+                r"\b(sales?|bikri|collection|receipts?|jama|orders?|credit\s*notes?|debit\s*notes?|"
+                r"vouchers?|invoices?|bills?|payable|receivable|ledgers?|parties?|"
+                r"customers?|vendors?|balance|outstanding|baaki|lena|dena|cash|bank|daybook|profit|"
+                r"loss|balance\s*sheet|reports?|stock|inventory|items?|tickets?|complaint|connector|"
+                r"sync|tally|status|create|bana|generate|daal|karo|kaat|raise|open|बना)\b|"
+                r"(बिक्री|सेल्स|खाता|बकाया|कलेक्शन|रसीद|बिल|वाउचर|लेनदेन|स्टॉक|इन्वेंट्री|शिकायत|टिकट)",
                 message_text,
                 re.IGNORECASE,
             )
         )
-        if not is_mutation_cmd:
-            cached_result = await semantic_cache.get_match(message_text)
+        if not is_dynamic_business_or_mutation_query:
+            cached_result = await semantic_cache.get_match(
+                message_text,
+                tenant_id=ctx.tenant_id,
+                company_id=effective_company_id,
+            )
             if cached_result:
                 assistant_msg = ConversationMessage(
                     conversation_id=conv_id,
@@ -174,9 +186,15 @@ class ChatService:
         # Restore any PII tokens in response if applicable
         final_content = pii_scrubber.restore(ai_result["content"], pii_mapping)
 
-        # Store in Semantic Cache for future instant replies (informational only)
-        if not is_mutation_cmd:
-            await semantic_cache.store_match(message_text, final_content, ai_result.get("tool_calls"))
+        # Store in Semantic Cache for future instant replies ONLY if purely generic non-business query without tool calls
+        if not is_dynamic_business_or_mutation_query and not ai_result.get("tool_calls"):
+            await semantic_cache.store_match(
+                message_text,
+                final_content,
+                ai_result.get("tool_calls"),
+                tenant_id=ctx.tenant_id,
+                company_id=effective_company_id,
+            )
 
         # 8. Persist Assistant Message
         assistant_msg = ConversationMessage(
