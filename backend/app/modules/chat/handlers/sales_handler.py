@@ -67,28 +67,73 @@ async def handle_sales_analytics(
         target_module = "sales"
         module_name = "Sales"
 
-    # Determine date range
+    # Determine date range & query intent
     today_obj = datetime.date.today()
     today_iso = today_obj.isoformat()
-    if any(w in last_msg_lower for w in ["kal", "yesterday", "pichla din"]):
+
+    is_total_requested = bool(
+        re.search(
+            r"\b(total|overall|all[\s\-]?time|lifetime|till\s+date|full|sab|poora|pura|kul|complete|gross|all)\b",
+            last_msg_lower,
+            re.IGNORECASE,
+        )
+    )
+    is_today_requested = bool(
+        re.search(
+            r"\b(aaj|today|current\s+day|aaj\s+ka|aaj\s+ki)\b",
+            last_msg_lower,
+            re.IGNORECASE,
+        )
+    )
+    is_yesterday_requested = any(w in last_msg_lower for w in ["kal", "yesterday", "pichla din", "bita kal"])
+    is_this_month_requested = any(w in last_msg_lower for w in ["is mahine", "this month", "current month", "is month"])
+    is_last_month_requested = any(w in last_msg_lower for w in ["pichla mahina", "last month", "pichle mahine"])
+    is_week_requested = any(w in last_msg_lower for w in ["pichle hafte", "last week", "7 din", "7 days", "is hafte", "this week"])
+    is_year_requested = any(w in last_msg_lower for w in ["is saal", "this year", "financial year", "fy", "current year"])
+
+    if is_total_requested and not is_today_requested and not is_yesterday_requested:
+        from_date = None
+        to_date = None
+        period_label = "Overall (All-Time Lifetime Total)"
+    elif is_today_requested:
+        from_date = today_iso
+        to_date = today_iso
+        period_label = f"Aaj ({today_obj.strftime('%d %b %Y')})"
+    elif is_yesterday_requested:
         y_obj = today_obj - datetime.timedelta(days=1)
         from_date = y_obj.isoformat()
         to_date = y_obj.isoformat()
         period_label = f"Kal ({y_obj.strftime('%d %b %Y')})"
-    elif any(w in last_msg_lower for w in ["is mahine", "this month", "current month"]):
+    elif is_this_month_requested:
         first_day = today_obj.replace(day=1).isoformat()
         from_date = first_day
         to_date = today_iso
         period_label = f"Is Mahine ({today_obj.strftime('%B %Y')})"
-    elif any(w in last_msg_lower for w in ["pichle hafte", "last week", "7 din", "7 days"]):
+    elif is_last_month_requested:
+        first_of_this_month = today_obj.replace(day=1)
+        last_day_of_last_month = first_of_this_month - datetime.timedelta(days=1)
+        first_day_of_last_month = last_day_of_last_month.replace(day=1)
+        from_date = first_day_of_last_month.isoformat()
+        to_date = last_day_of_last_month.isoformat()
+        period_label = f"Pichla Mahina ({first_day_of_last_month.strftime('%B %Y')})"
+    elif is_week_requested:
         week_ago = (today_obj - datetime.timedelta(days=7)).isoformat()
         from_date = week_ago
         to_date = today_iso
         period_label = "Pichle 7 Din (Last 7 Days)"
-    else:
-        from_date = today_iso
+    elif is_year_requested:
+        fy_year = today_obj.year if today_obj.month >= 4 else today_obj.year - 1
+        fy_start = datetime.date(fy_year, 4, 1).isoformat()
+        from_date = fy_start
         to_date = today_iso
-        period_label = f"Aaj ({today_obj.strftime('%d %b %Y')})"
+        period_label = f"Financial Year (FY {fy_year}-{str(fy_year+1)[-2:]})"
+    else:
+        # Default fallback: When user doesn't mention 'today' or any timeframe,
+        # default to active current month rather than single-day 'aaj' to provide useful figures
+        first_day = today_obj.replace(day=1).isoformat()
+        from_date = first_day
+        to_date = today_iso
+        period_label = f"Is Mahine ({today_obj.strftime('%B %Y')})"
 
     # Extract search query q if user specified a party name or voucher query
     search_q = None
@@ -96,7 +141,15 @@ async def handle_sales_analytics(
     if q_match:
         cand_q = q_match.group(1).strip()
         cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
-        if len(cand_q) >= 2 and cand_q.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "aaj", "total"}:
+        time_filter_words = {
+            "is", "is mahine", "this month", "current month", "last month", "pichla mahina",
+            "pichle mahine", "pichle hafte", "last week", "is hafte", "this week", "aaj",
+            "today", "kal", "yesterday", "saal", "year", "this year", "is saal", "total",
+            "overall", "all", "sab", "pura", "poora", "kul", "company", "sales", "purchase",
+            "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "bikri", "data",
+            "mahina", "mahine", "month", "hafte", "hafta", "week"
+        }
+        if len(cand_q) >= 2 and cand_q.lower() not in time_filter_words:
             search_q = cand_q
 
     # Company details resolution
@@ -128,18 +181,47 @@ async def handle_sales_analytics(
     items_list = analytics_data.get("items", [])
     tool_results_text = f"\n[Sales Analytics]: Company={effective_company}, Module={module_name}, Period={period_label}, TotalAmount={tot_amt}, TotalCount={tot_cnt}"
 
+    # Also fetch recent month data if total was requested, so user sees both All-Time and Month figures
+    recent_period_amt = 0.0
+    recent_period_cnt = 0
+    if is_total_requested:
+        try:
+            trailing_date = (today_obj - datetime.timedelta(days=32)).replace(day=1).isoformat()
+            month_snap = await connector_client.get_company_sales_module(
+                endpoint_suffix=target_module,
+                company_name=effective_company,
+                company_id=effective_company_id,
+                q=search_q,
+                from_date=trailing_date,
+                to_date=today_iso,
+                page=1,
+                limit=3,
+                token=caller.get("connector_token"),
+            )
+            recent_period_amt = float(month_snap.get("total_amount") or 0.0)
+            recent_period_cnt = int(month_snap.get("total_count") or 0)
+        except Exception:
+            pass
+
     # Format natural language corporate response
     if tot_cnt > 0 or tot_amt > 0:
         top_items_txt = ""
         for itm in items_list[:3]:
             top_items_txt += f"  • `{itm.get('voucher_number', 'VCH')}` — **{itm.get('party_ledger', 'Customer')}**: ₹{itm.get('amount', 0):,.2f}\n"
 
+        period_display = f"{from_date} to {to_date}" if from_date and to_date else "All-Time Lifetime Records (Synced from Tally Prime)"
+
+        month_extra_en = f"• **Current Period / Active Month**: **₹{recent_period_amt:,.2f}** ({recent_period_cnt} vouchers)\n" if (is_total_requested and recent_period_amt > 0) else ""
+        month_extra_hi = f"• **हालिया सक्रिय माह (Active Month)**: **₹{recent_period_amt:,.2f}** ({recent_period_cnt} वाउचर)\n" if (is_total_requested and recent_period_amt > 0) else ""
+        month_extra_hing = f"• **Recent Period / Active Month**: **₹{recent_period_amt:,.2f}** ({recent_period_cnt} vouchers)\n" if (is_total_requested and recent_period_amt > 0) else ""
+
         if lang_code == "en-IN":
             slot_missing_reply = (
                 f"📊 **{effective_company} — {period_label} {module_name} Report:**\n\n"
                 f"• **Total {module_name} Value:** **₹{tot_amt:,.2f}**\n"
                 f"• **Total Count:** **{tot_cnt}** {module_name.lower()}(s)\n"
-                f"• **Period Range:** {from_date} to {to_date}\n\n"
+                f"{month_extra_en}"
+                f"• **Period Range:** {period_display}\n\n"
             )
             if top_items_txt:
                 slot_missing_reply += f"**Key Transactions:**\n{top_items_txt}\n"
@@ -149,7 +231,8 @@ async def handle_sales_analytics(
                 f"📊 **{effective_company} — {period_label} {module_name} रिपोर्ट:**\n\n"
                 f"• **कुल राशि (Total Amount):** **₹{tot_amt:,.2f}**\n"
                 f"• **कुल वाउचर/बिल संख्या:** **{tot_cnt}**\n"
-                f"• **तारीख सीमा:** {from_date} से {to_date}\n\n"
+                f"{month_extra_hi}"
+                f"• **तारीख सीमा:** {period_display}\n\n"
             )
             if top_items_txt:
                 slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_items_txt}\n"
@@ -159,7 +242,8 @@ async def handle_sales_analytics(
                 f"📊 **{effective_company}** ka **{period_label}** ka **{module_name}** summary mil gaya hai:\n\n"
                 f"• **Kul Bikri / Total Amount:** **₹{tot_amt:,.2f}**\n"
                 f"• **Total Vouchers / Invoices:** **{tot_cnt}**\n"
-                f"• **Date Period:** {from_date} se {to_date}\n\n"
+                f"{month_extra_hing}"
+                f"• **Date Period:** {period_display}\n\n"
             )
             if top_items_txt:
                 slot_missing_reply += f"**Top Transactions:**\n{top_items_txt}\n"
@@ -170,6 +254,8 @@ async def handle_sales_analytics(
         recent_items = []
         overall_total = 0.0
         overall_count = 0
+        month_total = 0.0
+        month_count = 0
         try:
             recent_data = await connector_client.get_company_sales_module(
                 endpoint_suffix=target_module,
@@ -188,6 +274,24 @@ async def handle_sales_analytics(
         except Exception:
             pass
 
+        try:
+            trailing_date = (today_obj - datetime.timedelta(days=32)).replace(day=1).isoformat()
+            month_data = await connector_client.get_company_sales_module(
+                endpoint_suffix=target_module,
+                company_name=effective_company,
+                company_id=effective_company_id,
+                q=search_q,
+                from_date=trailing_date,
+                to_date=today_iso,
+                page=1,
+                limit=3,
+                token=caller.get("connector_token"),
+            )
+            month_total = float(month_data.get("total_amount") or 0.0)
+            month_count = int(month_data.get("total_count") or 0)
+        except Exception:
+            pass
+
         if recent_items:
             latest_v = recent_items[0]
             v_no = latest_v.get("voucher_number", "VCH")
@@ -195,24 +299,31 @@ async def handle_sales_analytics(
             amt_val = latest_v.get("amount", 0.0)
             d_val = latest_v.get("date", "")
 
+            month_line_en = f"• **Recent / Active Month**: **₹{month_total:,.2f}** ({month_count} entries)\n" if month_count > 0 else ""
+            month_line_hi = f"• **हालिया सक्रिय माह (Recent Month)**: **₹{month_total:,.2f}** ({month_count} वाउचर)\n" if month_count > 0 else ""
+            month_line_hing = f"• **Recent Active Period**: **₹{month_total:,.2f}** ({month_count} vouchers)\n" if month_count > 0 else ""
+
             if lang_code == "en-IN":
                 slot_missing_reply = (
                     f"ℹ️ In **{effective_company}**, no new {module_name.lower()} entries were recorded for **{period_label}** (Total: ₹0.00).\n\n"
-                    f"• **Overall {module_name} in Tally**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
+                    f"{month_line_en}"
+                    f"• **Overall All-Time {module_name}**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
                     f"• **Latest Recorded {module_name}**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f} on {d_val})\n\n"
                     f"Would you like me to create a new {module_name.lower()} voucher in Tally Prime?"
                 )
             elif lang_code == "hi-IN":
                 slot_missing_reply = (
                     f"ℹ️ **{effective_company}** में **{period_label}** के लिए कोई नई {module_name.lower()} एंट्री नहीं मिली (कुल: ₹0.00)।\n\n"
-                    f"• **Tally में कुल {module_name}**: **₹{overall_total:,.2f}** ({overall_count} रिकॉर्ड)\n"
+                    f"{month_line_hi}"
+                    f"• **Tally में कुल लाइफटाइम {module_name}**: **₹{overall_total:,.2f}** ({overall_count} रिकॉर्ड)\n"
                     f"• **नवीनतम (Latest) वाउचर**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f}, दिनांक {d_val})\n\n"
                     f"क्या आप नया वाउचर पोस्ट करना चाहते हैं?"
                 )
             else:
                 slot_missing_reply = (
                     f"ℹ️ **{effective_company}** me **{period_label}** ke liye koi nayi {module_name.lower()} entry nahi mili (Total: ₹0.00).\n\n"
-                    f"• **Tally me Kul {module_name}**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
+                    f"{month_line_hing}"
+                    f"• **Tally me Kul Lifetime {module_name}**: **₹{overall_total:,.2f}** ({overall_count} entries recorded)\n"
                     f"• **Latest {module_name} Entry**: `{v_no}` — **{p_name}** (₹{amt_val:,.2f}, {d_val} ko)\n\n"
                     f"Kya aap naya voucher banana chahte hain ya pichla record dekhna chahte hain?"
                 )

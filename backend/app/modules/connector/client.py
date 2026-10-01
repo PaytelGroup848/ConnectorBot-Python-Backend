@@ -110,6 +110,19 @@ class ConnectorClient:
             res = await client.request(method=method, url=url, headers=headers, params=params, json=json_data)
             if res.status_code in [200, 201]:
                 return res.json()
+            if (
+                res.status_code in [401, 403]
+                and token
+                and token != settings.CONNECTOR_API_TOKEN
+                and settings.CONNECTOR_API_TOKEN
+            ):
+                logger.warning(
+                    f"Connector API token returned {res.status_code} for {url}, retrying with server CONNECTOR_API_TOKEN"
+                )
+                headers["Authorization"] = f"Bearer {settings.CONNECTOR_API_TOKEN}"
+                res = await client.request(method=method, url=url, headers=headers, params=params, json=json_data)
+                if res.status_code in [200, 201]:
+                    return res.json()
             logger.warning(f"Connector API returned status {res.status_code} for {url}")
             return {"success": False, "statusCode": res.status_code, "data": None}
         except Exception as e:
@@ -353,7 +366,7 @@ class ConnectorClient:
                             if cid == str(company_id):
                                 c_name = str(comp.get("tallyCompanyName") or comp.get("company_name") or comp.get("name") or "Connected Company")
                                 return {"company_id": cid, "company_name": c_name}
-                    if company_name:
+                    if company_name and company_name.lower().strip() not in ("ctrlbooks", "default", "your company", "connected company"):
                         target = company_name.lower().strip()
                         clean_target = re.sub(r"\b(company|firm|ltd|pvt|enterprise|trader|traders)\b", "", target).strip()
                         target_words = [w for w in target.split() if len(w) >= 3 and w not in ("company", "firm", "ltd", "pvt")]
@@ -369,9 +382,14 @@ class ConnectorClient:
                                 return {"company_id": cid, "company_name": c_name}
                     first_comp = raw_list[0]
                     first_id = str(first_comp.get("id") or first_comp.get("_id") or "6aa0f659f858467a84d08d57")
-                    first_name = str(first_comp.get("tallyCompanyName") or first_comp.get("company_name") or first_comp.get("name") or (company_name or "Connected Company"))
+                    first_name = str(first_comp.get("tallyCompanyName") or first_comp.get("company_name") or first_comp.get("name") or "Connected Company")
                     return {"company_id": first_id, "company_name": first_name}
-        return {"company_id": company_id or "6aa0f659f858467a84d08d57", "company_name": company_name or "Connected Company"}
+        fallback_name = (
+            company_name
+            if company_name and company_name.lower().strip() not in ("ctrlbooks", "default", "your company", "connected company")
+            else "Connected Company"
+        )
+        return {"company_id": company_id or "6aa0f659f858467a84d08d57", "company_name": fallback_name}
 
     async def resolve_company_id(
         self,
@@ -637,6 +655,7 @@ class ConnectorClient:
                 return default
 
         raw_items = []
+        raw_d: Any = None
         pagination_data: Dict[str, Any] = {}
         total_amount = 0.0
 
@@ -736,6 +755,8 @@ class ConnectorClient:
             or pagination_data.get("totalItems")
             or pagination_data.get("totalRecords")
             or pagination_data.get("count")
+            or (raw_d.get("total") if isinstance(raw_d, dict) else None)
+            or (raw_d.get("count") if isinstance(raw_d, dict) else None)
             or len(clean_items)
         )
 
