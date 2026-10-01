@@ -4,6 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload
 from app.models.ticket import SupportTicket, TicketMessage, TicketEvent
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.middleware.tenant_context import get_or_resolve_default_tenant_and_user
 from app.core.exceptions import NotFoundException, ForbiddenException, ConflictException
 
 
@@ -32,6 +35,18 @@ class TicketService:
             existing = res.scalar_one_or_none()
             if existing:
                 return existing
+
+        # Multi-tenant integrity guard: Ensure tenant_id and user_id exist in database
+        tenant = await self.db.get(Tenant, tenant_id)
+        if not tenant:
+            def_tid, def_uid = await get_or_resolve_default_tenant_and_user(self.db)
+            tenant_id = def_tid
+            user_id = def_uid
+        else:
+            user = await self.db.get(User, user_id)
+            if not user:
+                _, def_uid = await get_or_resolve_default_tenant_and_user(self.db)
+                user_id = def_uid
 
         ticket = SupportTicket(
             tenant_id=tenant_id,

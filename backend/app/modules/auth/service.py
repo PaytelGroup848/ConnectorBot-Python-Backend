@@ -39,23 +39,28 @@ class AuthService:
         user = res.scalar_one_or_none()
 
         if not user:
-            # 1. Create Tenant
-            tenant = Tenant(
-                name=tenant_name,
-                status="ACTIVE",
-                plan="Pro",
-                connector_tenant_id=f"cnt_{user_email.split('@')[0]}",
-            )
-            self.db.add(tenant)
-            await self.db.flush()
+            # 1. Resolve primary tenant if available, or create new
+            stmt_t = select(Tenant).order_by(Tenant.created_at).limit(1)
+            res_t = await self.db.execute(stmt_t)
+            tenant = res_t.scalar_one_or_none()
+            if not tenant:
+                tenant = Tenant(
+                    name=tenant_name,
+                    status="ACTIVE",
+                    plan="Pro",
+                    connector_tenant_id=f"cnt_{user_email.split('@')[0]}",
+                )
+                self.db.add(tenant)
+                await self.db.flush()
 
             # 2. Create User
+            is_guest = connector_token.startswith("guest_") or "guest" in user_email.lower()
             user = User(
                 tenant_id=tenant.id,
                 connector_user_id=f"usr_{user_email.split('@')[0]}",
                 email=user_email,
                 name=user_name,
-                role="ADMIN",
+                role="GUEST" if is_guest else "ADMIN",
                 is_active=True,
             )
             self.db.add(user)

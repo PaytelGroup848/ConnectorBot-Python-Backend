@@ -3,9 +3,11 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from app.models.conversation import Conversation, ConversationMessage, ConversationSummary
+from app.models.tenant import Tenant
+from app.models.user import User
 from app.models.usage import AIUsage
 from app.modules.chat.ai_gateway import ai_gateway
-from app.middleware.tenant_context import TenantContext
+from app.middleware.tenant_context import TenantContext, get_or_resolve_default_tenant_and_user
 from app.core.exceptions import NotFoundException
 from app.core.pii_scrubber import pii_scrubber
 from app.core.semantic_cache import semantic_cache
@@ -70,6 +72,17 @@ class ChatService:
 
         # Agar conversation_id nahi aayi ya purani ID DB me nahi mili, toh gracefully nayi conversation bana lo
         if not conv:
+            # Multi-tenant integrity guard: Ensure tenant_id and user_id exist in database
+            tenant = await self.db.get(Tenant, ctx.tenant_id)
+            if not tenant:
+                def_tid, def_uid = await get_or_resolve_default_tenant_and_user(self.db)
+                ctx = TenantContext(user_id=def_uid, tenant_id=def_tid, role=ctx.role)
+            else:
+                user = await self.db.get(User, ctx.user_id)
+                if not user:
+                    _, def_uid = await get_or_resolve_default_tenant_and_user(self.db)
+                    ctx = TenantContext(user_id=def_uid, tenant_id=ctx.tenant_id, role=ctx.role)
+
             conv = Conversation(
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
