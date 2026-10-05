@@ -34,7 +34,7 @@ async def get_or_resolve_default_tenant_and_user(db: AsyncSession) -> Tuple[str,
         # 1. Fetch primary tenant from database
         stmt = select(Tenant).order_by(Tenant.created_at).limit(1)
         res = await db.execute(stmt)
-        tenant = res.scalar_one_or_none()
+        tenant = res.scalars().first()
 
         if not tenant:
             tenant = Tenant(
@@ -49,7 +49,7 @@ async def get_or_resolve_default_tenant_and_user(db: AsyncSession) -> Tuple[str,
         # 2. Fetch primary user for this tenant
         user_stmt = select(User).where(User.tenant_id == tenant.id).order_by(User.created_at).limit(1)
         user_res = await db.execute(user_stmt)
-        user = user_res.scalar_one_or_none()
+        user = user_res.scalars().first()
 
         if not user:
             user = User(
@@ -104,9 +104,9 @@ async def get_optional_tenant_context(
             unverified = jwt.get_unverified_claims(token)
             connector_uid = unverified.get("userId") or unverified.get("sub") or unverified.get("id")
             if connector_uid:
-                u_stmt = select(User).where(User.connector_user_id == f"usr_{connector_uid}").limit(1)
+                u_stmt = select(User).where(User.connector_user_id == f"usr_{connector_uid}").order_by(User.created_at.desc()).limit(1)
                 u_res = await db.execute(u_stmt)
-                db_user = u_res.scalar_one_or_none()
+                db_user = u_res.scalars().first()
                 if db_user:
                     user_id = str(db_user.id)
                     tenant_id = str(db_user.tenant_id)

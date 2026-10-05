@@ -20,29 +20,40 @@ class AuthService:
         name: Optional[str] = None,
     ) -> dict:
         user_email = email
-        if not user_email and connector_token:
+        connector_uid = None
+        if connector_token:
             try:
                 from jose import jwt
                 unv = jwt.get_unverified_claims(connector_token)
-                uid = unv.get("userId") or unv.get("sub") or unv.get("id")
-                if uid:
-                    user_email = f"user_{uid}@connector.cloudata.in"
+                connector_uid = unv.get("userId") or unv.get("sub") or unv.get("id")
+                if not user_email and connector_uid:
+                    user_email = f"user_{connector_uid}@connector.cloudata.in"
             except Exception:
                 pass
         user_email = user_email or "user@connector.cloudata.in"
         user_name = name or "Connector User"
         tenant_name = "Primary Organization"
 
-        # Check existing user by email
-        stmt = select(User).where(User.email == user_email)
+        # Check existing user by email or connector_user_id (safely fetch latest active user without MultipleResultsFound)
+        from sqlalchemy import or_
+        conditions = [User.email == user_email]
+        if connector_uid:
+            conditions.append(User.connector_user_id == f"usr_{connector_uid}")
+
+        stmt = (
+            select(User)
+            .where(or_(*conditions))
+            .order_by(User.is_active.desc(), User.created_at.desc())
+            .limit(1)
+        )
         res = await self.db.execute(stmt)
-        user = res.scalar_one_or_none()
+        user = res.scalars().first()
 
         if not user:
             # 1. Resolve primary tenant if available, or create new
             stmt_t = select(Tenant).order_by(Tenant.created_at).limit(1)
             res_t = await self.db.execute(stmt_t)
-            tenant = res_t.scalar_one_or_none()
+            tenant = res_t.scalars().first()
             if not tenant:
                 tenant = Tenant(
                     name=tenant_name,
@@ -57,7 +68,7 @@ class AuthService:
             is_guest = connector_token.startswith("guest_") or "guest" in user_email.lower()
             user = User(
                 tenant_id=tenant.id,
-                connector_user_id=f"usr_{user_email.split('@')[0]}",
+                connector_user_id=f"usr_{connector_uid}" if connector_uid else f"usr_{user_email.split('@')[0]}",
                 email=user_email,
                 name=user_name,
                 role="GUEST" if is_guest else "ADMIN",
@@ -66,6 +77,21 @@ class AuthService:
             self.db.add(user)
             await self.db.commit()
             await self.db.refresh(user)
+        else:
+            # Update user details if needed
+            needs_update = False
+            if name and user.name != name:
+                user.name = name
+                needs_update = True
+            if not user.is_active:
+                user.is_active = True
+                needs_update = True
+            if connector_uid and not user.connector_user_id:
+                user.connector_user_id = f"usr_{connector_uid}"
+                needs_update = True
+            if needs_update:
+                await self.db.commit()
+                await self.db.refresh(user)
 
         # Generate AI access token
         access_token = create_access_token(
