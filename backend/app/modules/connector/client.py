@@ -679,6 +679,7 @@ class ConnectorClient:
         - GET /companies/{CompanyId}/credit-notes
         - GET /companies/{CompanyId}/receipts
         - GET /companies/{CompanyId}/sales-orders
+        - GET /companies/{CompanyId}/payments
         Supports search query 'q', date range 'from' & 'to', pagination, and resilient local queue fallback.
         """
         comp_details = await self.resolve_company_details(company_name=company_name, company_id=company_id, token=token)
@@ -722,6 +723,8 @@ class ConnectorClient:
                 for k in [
                     endpoint_suffix.replace("-", ""),
                     endpoint_suffix,
+                    "payments",
+                    "payment",
                     "sales",
                     "creditNotes",
                     "creditnotes",
@@ -823,6 +826,7 @@ class ConnectorClient:
                     "credit-notes": ("CREATE_CREDIT_NOTE", "Credit Note"),
                     "receipts": ("CREATE_RECEIPT", "Receipt"),
                     "sales-orders": ("CREATE_SALES_ORDER", "Sales Order"),
+                    "payments": ("CREATE_PAYMENT", "Payment"),
                 }
                 match_cmd, match_vtype = q_type_map.get(endpoint_suffix, ("CREATE_VOUCHER", "Sales"))
                 for q_cmd in reversed(command_queue_service.list_queued_commands()):
@@ -861,6 +865,7 @@ class ConnectorClient:
                 "credit-notes": "Credit Note",
                 "receipts": "Receipt",
                 "sales-orders": "Sales Order",
+                "payments": "Payment",
             }.get(endpoint_suffix, "Sales"),
             "company_name": effective_company,
             "company_id": resolved_cid,
@@ -883,6 +888,9 @@ class ConnectorClient:
 
     async def get_company_sales_orders(self, **kwargs) -> Dict[str, Any]:
         return await self.get_company_sales_module("sales-orders", **kwargs)
+
+    async def get_company_payments(self, **kwargs) -> Dict[str, Any]:
+        return await self.get_company_sales_module("payments", **kwargs)
 
     # --------------------------------------------------------------------------
     # Official Reports Module (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)

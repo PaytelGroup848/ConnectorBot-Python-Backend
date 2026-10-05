@@ -531,11 +531,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_sales_analytics_command",
-            "description": "Retrieves real-time analytics and transaction lists for Sales, Credit Notes, Receipts, or Sales Orders.",
+            "description": "Retrieves real-time analytics and transaction lists for Sales, Credit Notes, Receipts, Sales Orders, or Payments.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "module": {"type": "string", "description": "sales, credit-notes, receipts, or sales-orders"},
+                    "module": {"type": "string", "description": "sales, credit-notes, receipts, sales-orders, or payments"},
                     "company_name": {"type": "string", "description": "Name of the Tally company"},
                     "company_id": {"type": "string", "description": "Optional specific Company ID"},
                     "q": {"type": "string", "description": "Search query filter (party or voucher number)"},
@@ -543,6 +543,25 @@ TOOL_DEFINITIONS = [
                     "to_date": {"type": "string", "description": "End date (YYYY-MM-DD)"},
                     "page": {"type": "number", "description": "Page number (default: 1)"},
                     "limit": {"type": "number", "description": "Max records (default: 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_payments_command",
+            "description": "Retrieves real-time outgoing payment vouchers and records made to vendors, suppliers, or expense accounts from Tally Prime via CtrlBooks Cloud API.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "q": {"type": "string", "description": "Search query filter (vendor name, party name, or voucher number)"},
+                    "from_date": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
+                    "to_date": {"type": "string", "description": "End date (YYYY-MM-DD)"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max records (default: 10)"},
                 },
             },
         },
@@ -961,6 +980,19 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
             to_date=args.get("to_date"),
             page=int(args.get("page", 1)),
             limit=int(args.get("limit", 20)),
+            token=args.get("connector_token"),
+        )
+
+    # 18b. Outgoing Payments & Vendor Dues Module
+    elif tool_name == "get_payments_command":
+        return await connector_client.get_company_payments(
+            company_name=args.get("company_name"),
+            company_id=args.get("company_id"),
+            q=args.get("q"),
+            from_date=args.get("from_date") or args.get("from"),
+            to_date=args.get("to_date") or args.get("to"),
+            page=int(args.get("page", 1)),
+            limit=int(args.get("limit", 10)),
             token=args.get("connector_token"),
         )
 

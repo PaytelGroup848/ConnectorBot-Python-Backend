@@ -33,10 +33,10 @@ async def handle_sales_analytics(
         and (not has_specific_vnum)
         and bool(
             re.search(
-                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
-                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?)\b|"
-                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?)\b|"
-                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट)",
+                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
+                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan)\b|"
+                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?|payments?|bhugtan)\b|"
+                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट|कुल\s*भुगतान|आज\s*का\s*भुगतान|पेमेंट\s*रिपोर्ट)",
                 last_msg_lower,
                 re.IGNORECASE,
             )
@@ -57,7 +57,10 @@ async def handle_sales_analytics(
     if any(w in last_msg_lower for w in ["credit note", "credit notes", "creditnote", "sales return", "क्रेडिट नोट"]):
         target_module = "credit-notes"
         module_name = "Credit Note"
-    elif any(w in last_msg_lower for w in ["receipt", "receipts", "collection", "jama", "payment", "रसीद"]):
+    elif any(w in last_msg_lower for w in ["payment", "payments", "bhugtan", "paid", "भुगतान", "पेमेंट"]):
+        target_module = "payments"
+        module_name = "Payment"
+    elif any(w in last_msg_lower for w in ["receipt", "receipts", "collection", "jama", "रसीद"]):
         target_module = "receipts"
         module_name = "Receipt"
     elif any(w in last_msg_lower for w in ["sales order", "sales orders", "salesorder", "order", "orders", "ऑर्डर"]):
@@ -137,7 +140,7 @@ async def handle_sales_analytics(
 
     # Extract search query q if user specified a party name or voucher query
     search_q = None
-    q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:sales|sale|receipt|collection|order|credit)", last_user_message, re.IGNORECASE)
+    q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:sales|sale|receipt|collection|order|credit|payment|payments|bhugtan|भुगतान|पेमेंट)", last_user_message, re.IGNORECASE)
     if q_match:
         cand_q = q_match.group(1).strip()
         cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
@@ -147,7 +150,8 @@ async def handle_sales_analytics(
             "today", "kal", "yesterday", "saal", "year", "this year", "is saal", "total",
             "overall", "all", "sab", "pura", "poora", "kul", "company", "sales", "purchase",
             "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "bikri", "data",
-            "mahina", "mahine", "month", "hafte", "hafta", "week"
+            "mahina", "mahine", "month", "hafte", "hafta", "week", "payment", "payments", "bhugtan",
+            "paid", "dena", "diya"
         }
         if len(cand_q) >= 2 and cand_q.lower() not in time_filter_words:
             search_q = cand_q
@@ -216,9 +220,10 @@ async def handle_sales_analytics(
         month_extra_hing = f"• **Recent Period / Active Month**: **₹{recent_period_amt:,.2f}** ({recent_period_cnt} vouchers)\n" if (is_total_requested and recent_period_amt > 0) else ""
 
         if lang_code == "en-IN":
+            stat_label_en = "Total Payments Made" if module_name == "Payment" else f"Total {module_name} Value"
             slot_missing_reply = (
                 f"📊 **{effective_company} — {period_label} {module_name} Report:**\n\n"
-                f"• **Total {module_name} Value:** **₹{tot_amt:,.2f}**\n"
+                f"• **{stat_label_en}:** **₹{tot_amt:,.2f}**\n"
                 f"• **Total Count:** **{tot_cnt}** {module_name.lower()}(s)\n"
                 f"{month_extra_en}"
                 f"• **Period Range:** {period_display}\n\n"
@@ -227,9 +232,10 @@ async def handle_sales_analytics(
                 slot_missing_reply += f"**Key Transactions:**\n{top_items_txt}\n"
             slot_missing_reply += "The interactive financial summary card has been loaded below with instant WhatsApp sharing!"
         elif lang_code == "hi-IN":
+            stat_label_hi = "कुल भुगतान राशि (Total Payments Made)" if module_name == "Payment" else "कुल राशि (Total Amount)"
             slot_missing_reply = (
                 f"📊 **{effective_company} — {period_label} {module_name} रिपोर्ट:**\n\n"
-                f"• **कुल राशि (Total Amount):** **₹{tot_amt:,.2f}**\n"
+                f"• **{stat_label_hi}:** **₹{tot_amt:,.2f}**\n"
                 f"• **कुल वाउचर/बिल संख्या:** **{tot_cnt}**\n"
                 f"{month_extra_hi}"
                 f"• **तारीख सीमा:** {period_display}\n\n"
@@ -238,9 +244,10 @@ async def handle_sales_analytics(
                 slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_items_txt}\n"
             slot_missing_reply += "नीचे लाइव समरी कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
         else:
+            stat_label_hing = "Total Payments Made / Kul Bhugtan" if module_name == "Payment" else "Kul Bikri / Total Amount"
             slot_missing_reply = (
                 f"📊 **{effective_company}** ka **{period_label}** ka **{module_name}** summary mil gaya hai:\n\n"
-                f"• **Kul Bikri / Total Amount:** **₹{tot_amt:,.2f}**\n"
+                f"• **{stat_label_hing}:** **₹{tot_amt:,.2f}**\n"
                 f"• **Total Vouchers / Invoices:** **{tot_cnt}**\n"
                 f"{month_extra_hing}"
                 f"• **Date Period:** {period_display}\n\n"
@@ -369,9 +376,9 @@ async def handle_voucher_lookup(
         and (not is_parties_intent)
         and bool(
             re.search(
-                r"\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous|kya\s+hai)\b.*?\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b|"
-                r"\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|entry|entries|वाउचर|इनवॉइस|बिल|રસીદ|બિલ)\b.*?\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous)\b|"
-                r"\b(mera|mere|apna|apne|my|our)\s+(?:sales\s+)?(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|entry|entries)\b|"
+                r"\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous|kya\s+hai)\b.*?\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|payment|payments|entry|entries|वाउचर|इनवॉइस|बिल|रसीद|બિલ|पेमेंट|भुगतान)\b|"
+                r"\b(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|sale|sales|payment|payments|entry|entries|वाउचर|इनवॉइस|बिल|रसीद|બિલ|पेमेंट|भुगतान)\b.*?\b(dikhao|dikha|dekho|dekhna|show|view|display|fetch|get|list|find|search|nikalo|batao|pichla|last|latest|previous)\b|"
+                r"\b(mera|mere|apna|apne|my|our)\s+(?:sales\s+|payment\s+)?(invoice|invoices|invois|bill|bills|voucher|vouchers|receipt|receipts|entry|entries)\b|"
                 r"(?:दिखाओ|देखो|दिखाना|બતાવો|દાખવા)",
                 last_msg_lower,
                 re.IGNORECASE,
@@ -392,14 +399,14 @@ async def handle_voucher_lookup(
     # Extract target company candidate if mentioned in the prompt
     comp_view_patterns = [
         r"^(?:in\s+)?(.*?)\s+(?:me|mein|में)\s+",
-        r"(?:company\s+|कंपनी\s+)?([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|company\s+ka|company\s+ki)\s+(?:voucher|invoice|bill|receipt)",
+        r"(?:company\s+|कंपनी\s+)?([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|company\s+ka|company\s+ki)\s+(?:voucher|invoice|bill|receipt|payment)",
     ]
     for pat in comp_view_patterns:
         m_c = re.search(pat, last_user_message, re.IGNORECASE)
         if m_c:
             c_cand = m_c.group(1).strip()
             c_cand = re.sub(r"^(?:mere|apne|my|the|in|mujhe|is)\s+", "", c_cand, flags=re.IGNORECASE).strip()
-            if len(c_cand) >= 3 and c_cand.lower() not in {"bill", "invoice", "voucher", "karo", "tally", "ctrlbooks"}:
+            if len(c_cand) >= 3 and c_cand.lower() not in {"bill", "invoice", "voucher", "payment", "karo", "tally", "ctrlbooks"}:
                 comp_details = await connector_client.resolve_company_details(
                     company_name=c_cand,
                     token=caller.get("connector_token"),
@@ -423,35 +430,62 @@ async def handle_voucher_lookup(
     v_num_match = re.search(r"(?:invoice|voucher|bill|inv|no|number|#)\s*(?:no\.?|num\.?|#)?\s*([A-Za-z0-9\-_]+)", last_user_message, re.IGNORECASE)
     if v_num_match:
         cand_num = v_num_match.group(1).strip()
-        if cand_num.lower() not in {"dikhao", "dekho", "view", "show", "hai", "batao", "karo", "mera", "mere", "ke", "ka", "ki", "me", "mein", "sales", "bill", "invoice", "voucher"}:
+        if cand_num.lower() not in {"dikhao", "dekho", "view", "show", "hai", "batao", "karo", "mera", "mere", "ke", "ka", "ki", "me", "mein", "sales", "bill", "invoice", "voucher", "payment"}:
             v_num = cand_num
     if not v_num:
-        v_num_match2 = re.search(r"(\d+)\s*(?:number|no|num)?\s*(?:ka\s+)?(?:bill|invoice|voucher)", last_user_message, re.IGNORECASE)
+        v_num_match2 = re.search(r"(\d+)\s*(?:number|no|num)?\s*(?:ka\s+)?(?:bill|invoice|voucher|payment)", last_user_message, re.IGNORECASE)
         if v_num_match2:
             v_num = v_num_match2.group(1).strip()
 
     # Extract party search query (e.g., "SuperFoods ka bill dikhao")
     party_search = None
-    party_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:bill|invoice|voucher|इनवॉइस|बिल|वाउचर)", last_user_message, re.IGNORECASE)
+    party_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:bill|invoice|voucher|payment|इनवॉइस|बिल|वाउचर|पेमेंट)", last_user_message, re.IGNORECASE)
     if party_match:
         cand_party = party_match.group(1).strip()
         cand_party = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne)\s+", "", cand_party, flags=re.IGNORECASE).strip()
-        if len(cand_party) >= 2 and cand_party.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "tally", "latest", "last", "pichla"}:
+        if len(cand_party) >= 2 and cand_party.lower() not in {"is", "company", "sales", "purchase", "bill", "invoice", "voucher", "payment", "tally", "latest", "last", "pichla"}:
             if cand_party.lower() not in effective_company.lower() and effective_company.lower() not in cand_party.lower():
                 party_search = cand_party
 
-    v_type_filter = "Receipt" if any(w in last_msg_lower for w in ["receipt", "रसीद"]) else "Sales"
+    if any(w in last_msg_lower for w in ["payment", "payments", "bhugtan", "paid", "भुगतान", "पेमेंट"]):
+        v_type_filter = "Payment"
+    elif any(w in last_msg_lower for w in ["receipt", "रसीद"]):
+        v_type_filter = "Receipt"
+    else:
+        v_type_filter = "Sales"
 
     # Query real-time synchronized vouchers from CtrlBooks Cloud API / Tally Prime
-    vouchers = await connector_client.get_company_vouchers(
-        company_name=effective_company,
-        company_id=effective_company_id,
-        voucher_type=v_type_filter,
-        voucher_number=v_num,
-        search=party_search,
-        limit=5,
-        token=caller.get("connector_token"),
-    )
+    vouchers = []
+    if v_type_filter == "Payment":
+        p_res = await connector_client.get_company_payments(
+            company_name=effective_company,
+            company_id=effective_company_id,
+            q=party_search or v_num,
+            limit=5,
+            token=caller.get("connector_token"),
+        )
+        if p_res.get("items"):
+            for p_it in p_res["items"]:
+                vouchers.append({
+                    "id": p_it.get("id"),
+                    "voucher_number": p_it.get("voucher_number"),
+                    "party_ledger": p_it.get("party_ledger"),
+                    "amount": p_it.get("amount"),
+                    "date": p_it.get("date"),
+                    "voucher_type": "Payment",
+                    "narration": p_it.get("narration"),
+                    "items": [],
+                })
+    if not vouchers:
+        vouchers = await connector_client.get_company_vouchers(
+            company_name=effective_company,
+            company_id=effective_company_id,
+            voucher_type=v_type_filter,
+            voucher_number=v_num,
+            search=party_search,
+            limit=5,
+            token=caller.get("connector_token"),
+        )
 
     if vouchers:
         top_v = vouchers[0]

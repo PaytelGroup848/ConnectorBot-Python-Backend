@@ -111,11 +111,11 @@ class ChatService:
         is_dynamic_business_or_mutation_query = bool(
             re.search(
                 r"\b(sales?|bikri|collection|receipts?|jama|orders?|credit\s*notes?|debit\s*notes?|"
-                r"vouchers?|invoices?|bills?|payable|receivable|ledgers?|parties?|"
+                r"payments?|bhugtan|paid|vouchers?|invoices?|bills?|payable|receivable|ledgers?|parties?|"
                 r"customers?|vendors?|balance|outstanding|baaki|lena|dena|cash|bank|daybook|profit|"
                 r"loss|balance\s*sheet|reports?|stock|inventory|items?|tickets?|complaint|connector|"
                 r"sync|tally|status|companies?|company|firm|workspace|create|bana|generate|daal|karo|kaat|raise|open|बना)\b|"
-                r"(बिक्री|सेल्स|खाता|बकाया|कलेक्शन|रसीद|बिल|वाउचर|लेनदेन|स्टॉक|इन्वेंट्री|शिकायत|टिकट|कंपनी|कंपनियां|फर्म)",
+                r"(बिक्री|सेल्स|खाता|बकाया|कलेक्शन|रसीद|बिल|वाउचर|लेनदेन|स्टॉक|इन्वेंट्री|शिकायत|टिकट|कंपनी|कंपनियां|फर्म|भुगतान|पेमेंट)",
                 message_text,
                 re.IGNORECASE,
             )
