@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.security_event import SecurityEvent
-from app.middleware.security_jail import ban_ip_immediately
+from app.middleware.security_jail import ban_ip_immediately, get_client_ip, is_ip_whitelisted
 
 router = APIRouter(tags=["Security Decoys & Honeypots"])
 
@@ -16,9 +16,21 @@ HONEYPOT_PATHS = [
 
 
 async def handle_honeypot(request: Request, db: AsyncSession = Depends(get_db)):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     path = request.url.path
     request_id = getattr(request.state, "request_id", "req_trap")
+
+    # If the request originates from a trusted/whitelisted IP, safely return 404 without banning
+    if is_ip_whitelisted(client_ip):
+        return {
+            "success": False,
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "Resource not found.",
+                "target": path,
+            },
+            "request_id": request_id,
+        }
 
     # 1. Immediately Jail the Hostile Attacker IP for 24 Hours
     await ban_ip_immediately(client_ip, reason=f"Hostile Honeypot Scanner hit: {path}")

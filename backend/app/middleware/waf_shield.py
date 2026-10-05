@@ -4,7 +4,13 @@ from typing import Tuple, Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from app.middleware.security_jail import record_strike, ban_ip_immediately, is_ip_banned
+from app.middleware.security_jail import (
+    record_strike,
+    ban_ip_immediately,
+    is_ip_banned,
+    get_client_ip,
+    is_ip_whitelisted,
+)
 
 logger = logging.getLogger("connector_ai.waf_shield")
 
@@ -86,10 +92,10 @@ class WAFShieldMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_client_ip(request)
 
-        # Skip docs endpoints
-        if path in EXCLUDED_PATHS:
+        # Skip docs endpoints and trusted infrastructure / whitelisted IPs
+        if path in EXCLUDED_PATHS or is_ip_whitelisted(client_ip):
             return await call_next(request)
 
         # 1. Inspect URL Path & Query Params

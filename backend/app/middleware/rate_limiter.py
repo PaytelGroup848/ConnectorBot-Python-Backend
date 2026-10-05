@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import Request
 from app.core.redis import cache_service
 from app.core.exceptions import RateLimitException
+from app.middleware.security_jail import get_client_ip, is_ip_whitelisted
 
 
 class RateLimiter:
@@ -12,7 +13,7 @@ class RateLimiter:
         self.tier_prefix = tier_prefix
 
     async def __call__(self, request: Request):
-        client_ip = request.client.host if request.client else "unknown_ip"
+        client_ip = get_client_ip(request)
         user_id = getattr(request.state, "user_id", None)
         tenant_id = getattr(request.state, "tenant_id", None)
 
@@ -20,13 +21,14 @@ class RateLimiter:
         ip_key = f"rate:{self.tier_prefix}:ip:{client_ip}"
         now_bucket = int(time.time() // 60)
 
-        # Check IP bucket
-        current_ip_count = await cache_service.client.incr(f"{ip_key}:{now_bucket}")
-        if current_ip_count == 1:
-            await cache_service.client.expire(f"{ip_key}:{now_bucket}", 65)
+        # Trusted infrastructure & whitelisted IPs bypass IP bucket rate limits
+        if not is_ip_whitelisted(client_ip):
+            current_ip_count = await cache_service.client.incr(f"{ip_key}:{now_bucket}")
+            if current_ip_count == 1:
+                await cache_service.client.expire(f"{ip_key}:{now_bucket}", 65)
 
-        if current_ip_count > self.requests_per_minute:
-            raise RateLimitException(f"Too many requests from this IP. Limit is {self.requests_per_minute}/min.")
+            if current_ip_count > self.requests_per_minute:
+                raise RateLimitException(f"Too many requests from this IP. Limit is {self.requests_per_minute}/min.")
 
         # If authenticated, enforce user-level limit
         if user_id:

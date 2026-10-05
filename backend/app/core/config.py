@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     ADMIN_EMAIL: str = "admin@ctrlbooks.com"
     ADMIN_PASSWORD: str = "CtrlBooks@2026!Admin"
+    SECURITY_IP_WHITELIST: str = "127.0.0.1,::1,191.44.87.1,191.44.87.206,210.56.147.234"
 
     # LLM Gateway
     AI_GATEWAY_BASE_URL: str = "https://api.mistral.ai/v1"

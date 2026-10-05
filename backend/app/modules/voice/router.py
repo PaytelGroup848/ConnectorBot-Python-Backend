@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.core.exceptions import APIException
 from app.middleware.tenant_context import TenantContext, get_current_tenant_context
 from app.middleware.rate_limiter import voice_limiter
-from app.middleware.security_jail import record_strike
+from app.middleware.security_jail import record_strike, get_client_ip
 from app.modules.voice.schemas import SynthesizeRequest, VoiceChatResponse
 from app.modules.voice.service import voice_service
 from app.modules.chat.service import ChatService
@@ -141,7 +141,7 @@ async def transcribe_audio(
     ctx: TenantContext = Depends(get_current_tenant_context),
 ):
     request_id = getattr(request.state, "request_id", "req_transcribe")
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     audio_bytes = await file.read()
     filename = file.filename or "audio.webm"
 
@@ -173,7 +173,7 @@ async def voice_chat(
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_voice_chat")
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     audio_bytes = await file.read()
     filename = file.filename or "speech.webm"
 
