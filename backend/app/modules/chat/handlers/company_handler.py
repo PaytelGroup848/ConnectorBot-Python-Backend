@@ -14,7 +14,15 @@ COMPANY_LIST_KEYWORDS = [
     "companies list", "list companies", "list of companies", "all companies", "meri companies",
     "mere companies", "kitne companies", "kitni company", "companies dikhao", "companies batao",
     "show companies", "show all companies", "my companies", "connected companies", "company list",
-    "कंपनियां", "मेरी कंपनियां", "कंपनियों की लिस्ट", "કંપનીઓ", "सर्व कंपन्या"
+    "list of company", "how many company", "how many companies", "how many company are existing",
+    "how many companies exist", "how many companies are there", "how many company exist",
+    "existing company", "existing companies", "total companies", "total company",
+    "number of companies", "number of company", "count of companies", "company count",
+    "companies count", "companies name", "company names", "companies names", "which companies",
+    "all company", "all my company", "all my companies", "available companies", "available company",
+    "kitne company", "kitni companies", "kitni compani", "kitne compani", "kitne company hai",
+    "kitni company hai", "kitni companies hai", "kitne companies hain",
+    "कंपनियां", "मेरी कंपनियां", "कंपनियों की लिस्ट", "કંપનીઓ", "सर्व कंपन्या", "कितनी कंपनी", "कितनी कंपनियां"
 ]
 
 COMPANY_DETAIL_KEYWORDS = [
@@ -23,8 +31,11 @@ COMPANY_DETAIL_KEYWORDS = [
     "connected company", "konsi company", "kaun si company", "company ka naam", "company data",
     "company overview", "company ka detail", "company ki detail", "company details do",
     "company batao", "company dikhao", "company profile dikhao", "company details chahiye",
+    "what is my company", "what is current company", "current company", "selected company",
+    "active workspace", "current workspace", "which company is active", "which company is selected",
+    "kaun si company active hai", "konsi company active hai", "meri active company", "active company konsi hai",
     "कंपनी की डिटेल", "कंपनी विवरण", "कंपनी की जानकारी", "कंपनी का नाम", "कंपनी प्रोफाइल",
-    "કંપની ની વિગત", "મારી કંપની", "कंपनीची माहिती", "माझी कंपनी"
+    "सक्रिय कंपनी", "वर्तमान कंपनी", "કંપની ની વિગત", "મારી કંપની", "कंपनीची माहिती", "माझी कंपनी"
 ]
 
 EXCLUDED_ACTION_WORDS = [
@@ -48,18 +59,29 @@ def is_company_query(text: str) -> Tuple[bool, bool]:
         if re.search(rf"\b{excl}\b", lower):
             return False, False
 
-    # Check for List mode
+    # Check for List mode keywords
     for kw in COMPANY_LIST_KEYWORDS:
         if kw in lower:
             return True, True
 
-    # Check for Detail mode
+    # Regex check for counting / listing companies:
+    # Matches: "how many company are existing", "how many companies do i have", "total companies", "count of companies", etc.
+    if re.search(r"\b(how\s+many|count\s+of|number\s+of|total|existing|available|all|all\s+my|which)\s+([a-z0-9_\-\s]{0,25})compan(y|ies)\b", lower):
+        return True, True
+    if re.search(r"\bcompan(y|ies)\s+(count|total|list|existing|available|names?)\b", lower):
+        return True, True
+    if re.search(r"\b(kitn[ei]|kitna|saari|sari)\s+([a-z0-9_\-\s]{0,25})compan(y|ies|i)\b", lower):
+        return True, True
+    if re.search(r"\bcompan(y|ies|i)\s+(kitn[ei]|kitna|hai|hain)\b", lower) and any(w in lower for w in ["kitna", "kitne", "kitni", "total", "existing", "exist"]):
+        return True, True
+
+    # Check for Detail mode keywords
     for kw in COMPANY_DETAIL_KEYWORDS:
         if kw in lower:
             return True, False
 
-    # Structural check: "company" + ("detail" / "details" / "info" / "profile" / "data" / "batao" / "dikhao" / "kya")
-    if ("company" in lower or "कंपनी" in lower) and any(w in lower for w in ["detail", "details", "info", "profile", "data", "overview", "batao", "do", "dikhao", "kya", "kaun", "konsi"]):
+    # Structural check: "company" + ("detail" / "details" / "info" / "profile" / "data" / "batao" / "dikhao" / "kya" / "what" / "which" / "active" / "current")
+    if ("company" in lower or "कंपनी" in lower) and any(w in lower for w in ["detail", "details", "info", "profile", "data", "overview", "batao", "do", "dikhao", "kya", "kaun", "konsi", "what", "which", "active", "current", "selected"]):
         return True, False
 
     return False, False
@@ -139,20 +161,46 @@ async def handle_company_details(
                 f"   • **Status:** 🟢 Connected"
             )
 
-        reply = (
-            f"🏢 **Aapki Connected Tally Companies ({len(all_comps)}):**\n\n"
-            + "\n\n".join(lines)
-            + f"\n\nKisi specific company ka data dekhne ke liye uska naam bataiye ya upar se switch kar lijiye!"
-        )
+        # Localized List Card
+        if lang_code == "en-IN":
+            reply = (
+                f"🏢 **You have {len(all_comps)} Connected Tally Companies:**\n\n"
+                + "\n\n".join(lines)
+                + f"\n\nCurrently, your active workspace in dashboard is **{active_company}**."
+                + f"\n💡 *To query financial data or vouchers for a company, select it from the header dropdown or mention its name.*"
+            )
+        elif lang_code == "hi-IN":
+            reply = (
+                f"🏢 **आपके खाते में कुल {len(all_comps)} कनेक्टेड टैली कंपनियां उपलब्ध हैं:**\n\n"
+                + "\n\n".join(lines)
+                + f"\n\nडैशबोर्ड में वर्तमान सक्रिय कंपनी: **{active_company}**"
+                + f"\n💡 *किसी भी कंपनी का डेटा देखने के लिए हेडर से स्विच करें या उसका नाम बताएं।*"
+            )
+        else:
+            reply = (
+                f"🏢 **{friendly_hi}, aapke account me total {len(all_comps)} Connected Tally Companies hain:**\n\n"
+                + "\n\n".join(lines)
+                + f"\n\nAbhi dashboard me aapka active workspace **{active_company}** select hai."
+                + f"\n💡 *Kisi specific company ka data dekhne ke liye uska naam bataiye ya upar header se switch kar lijiye!*"
+            )
         return True, executed_tools, tool_results_text, reply
 
     # =========================================================
     # CASE B: Single Company Details & Profile (GET /companies/:id)
     # =========================================================
-    effective_cid = caller.get("company_id")
-    if not effective_cid or len(str(effective_cid)) < 6:
+    effective_cid = None
+    if active_company and active_company.lower().strip() not in ("ctrlbooks", "default", "your company", "connected company"):
         resolved = await connector_client.resolve_company_details(company_name=active_company, token=token)
-        effective_cid = resolved.get("company_id")
+        if resolved.get("company_id"):
+            effective_cid = resolved.get("company_id")
+
+    if not effective_cid or len(str(effective_cid)) < 6 or str(effective_cid) == "6aa0f659f858467a84d08d57":
+        caller_cid = caller.get("company_id")
+        if caller_cid and str(caller_cid) != "6aa0f659f858467a84d08d57":
+            effective_cid = caller_cid
+        else:
+            resolved = await connector_client.resolve_company_details(company_name=active_company, token=token)
+            effective_cid = resolved.get("company_id")
 
     # Fetch live company profile from GET /companies/:id
     comp_profile = await connector_client.get_company_by_id(company_id=effective_cid, token=token)
