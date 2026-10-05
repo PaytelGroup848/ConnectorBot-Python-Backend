@@ -566,6 +566,44 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_purchases_command",
+            "description": "Retrieves real-time synchronized purchase bills, inward invoices, and supplier procurement records from Tally Prime via CtrlBooks Cloud API.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "q": {"type": "string", "description": "Search query filter (supplier name, item, or bill number)"},
+                    "from_date": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
+                    "to_date": {"type": "string", "description": "End date (YYYY-MM-DD)"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max records (default: 10)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_debit_notes_command",
+            "description": "Retrieves real-time synchronized debit notes, purchase returns, and supplier adjustment vouchers from Tally Prime via CtrlBooks Cloud API.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Name of the Tally company"},
+                    "company_id": {"type": "string", "description": "Optional specific Company ID"},
+                    "q": {"type": "string", "description": "Search query filter (supplier/vendor name or note number)"},
+                    "from_date": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
+                    "to_date": {"type": "string", "description": "End date (YYYY-MM-DD)"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Max records (default: 10)"},
+                },
+            },
+        },
+    },
     # 19. Official Accounting Reports (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
     {
         "type": "function",
@@ -986,6 +1024,32 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
     # 18b. Outgoing Payments & Vendor Dues Module
     elif tool_name == "get_payments_command":
         return await connector_client.get_company_payments(
+            company_name=args.get("company_name"),
+            company_id=args.get("company_id"),
+            q=args.get("q"),
+            from_date=args.get("from_date") or args.get("from"),
+            to_date=args.get("to_date") or args.get("to"),
+            page=int(args.get("page", 1)),
+            limit=int(args.get("limit", 10)),
+            token=args.get("connector_token"),
+        )
+
+    # 18c. Inward Purchases & Procurement Module
+    elif tool_name == "get_purchases_command":
+        return await connector_client.get_company_purchases(
+            company_name=args.get("company_name"),
+            company_id=args.get("company_id"),
+            q=args.get("q"),
+            from_date=args.get("from_date") or args.get("from"),
+            to_date=args.get("to_date") or args.get("to"),
+            page=int(args.get("page", 1)),
+            limit=int(args.get("limit", 10)),
+            token=args.get("connector_token"),
+        )
+
+    # 18d. Debit Notes & Purchase Returns Module
+    elif tool_name == "get_debit_notes_command":
+        return await connector_client.get_company_debit_notes(
             company_name=args.get("company_name"),
             company_id=args.get("company_id"),
             q=args.get("q"),

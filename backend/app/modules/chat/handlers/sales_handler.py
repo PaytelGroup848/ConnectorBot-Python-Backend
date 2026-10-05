@@ -33,10 +33,10 @@ async def handle_sales_analytics(
         and (not has_specific_vnum)
         and bool(
             re.search(
-                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
-                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan)\b|"
-                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?|payments?|bhugtan)\b|"
-                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट|कुल\s*भुगतान|आज\s*का\s*भुगतान|पेमेंट\s*रिपोर्ट)",
+                r"\b(sales?|bikri|collection|receipts?|jama|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan|purchases?|kharid|debit\s*notes?)\b.*?\b(batao|dikhao|summary|total|report|kitna|kitni|kitne|aaj|today|yesterday|kal|kya\s+hai|analysis|figure|status)\b|"
+                r"\b(aaj|today|kal|yesterday|is\s+mahine|this\s+month|pichle\s+hafte|last\s+week|last\s+\d+\s+days?)\b.*?\b(sales?|bikri|collection|receipts?|orders?|sales\s*orders?|credit\s*notes?|payments?|bhugtan|purchases?|kharid|debit\s*notes?)\b|"
+                r"\b(mere|mera|apna|apne|my|our|total)\s+(?:aaj\s+ka\s+|today(?:'s)?\s+)?(sales?|bikri|collection|receipts?|orders?|credit\s*notes?|payments?|bhugtan|purchases?|kharid|debit\s*notes?)\b|"
+                r"(?:आज\s*का\s*सेल्स|आज\s*की\s*बिक्री|कुल\s*सेल्स|आज\s*का\s*कलेक्शन|सेल्स\s*रिपोर्ट|कुल\s*भुगतान|आज\s*का\s*भुगतान|पेमेंट\s*रिपोर्ट|आज\s*का\s*परचेज|कुल\s*खरीद|डेबिट\s*नोट)",
                 last_msg_lower,
                 re.IGNORECASE,
             )
@@ -57,6 +57,12 @@ async def handle_sales_analytics(
     if any(w in last_msg_lower for w in ["credit note", "credit notes", "creditnote", "sales return", "क्रेडिट नोट"]):
         target_module = "credit-notes"
         module_name = "Credit Note"
+    elif any(w in last_msg_lower for w in ["debit note", "debit notes", "debitnote", "purchase return", "डेबिट नोट"]):
+        target_module = "debit-notes"
+        module_name = "Debit Note"
+    elif any(w in last_msg_lower for w in ["purchase", "purchases", "kharid", "buy", "buying", "खरीद", "परचेज"]):
+        target_module = "purchases"
+        module_name = "Purchase"
     elif any(w in last_msg_lower for w in ["payment", "payments", "bhugtan", "paid", "भुगतान", "पेमेंट"]):
         target_module = "payments"
         module_name = "Payment"
@@ -140,7 +146,7 @@ async def handle_sales_analytics(
 
     # Extract search query q if user specified a party name or voucher query
     search_q = None
-    q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|को|का|के)\s+(?:sales|sale|receipt|collection|order|credit|payment|payments|bhugtan|भुगतान|पेमेंट)", last_user_message, re.IGNORECASE)
+    q_match = re.search(r"([A-Za-z0-9\s&.\'-]+?)\s+(?:ka|ki|ke|ko|se|को|का|के|से)\s+(?:sales|sale|receipt|collection|order|credit|payment|payments|bhugtan|purchase|purchases|kharid|debit|भुगतान|पेमेंट|खरीद|डेबिट)", last_user_message, re.IGNORECASE)
     if q_match:
         cand_q = q_match.group(1).strip()
         cand_q = re.sub(r"^(?:bhai|bro|please|plz|ek|naya|new|mera|mere|apna|apne|aaj|today|kal)\s+", "", cand_q, flags=re.IGNORECASE).strip()
@@ -149,6 +155,7 @@ async def handle_sales_analytics(
             "pichle mahine", "pichle hafte", "last week", "is hafte", "this week", "aaj",
             "today", "kal", "yesterday", "saal", "year", "this year", "is saal", "total",
             "overall", "all", "sab", "pura", "poora", "kul", "company", "sales", "purchase",
+            "purchases", "kharid", "debit", "note", "notes", "buying", "buy",
             "bill", "invoice", "voucher", "tally", "latest", "last", "pichla", "bikri", "data",
             "mahina", "mahine", "month", "hafte", "hafta", "week", "payment", "payments", "bhugtan",
             "paid", "dena", "diya"
@@ -183,7 +190,7 @@ async def handle_sales_analytics(
     tot_amt = analytics_data.get("total_amount", 0.0)
     tot_cnt = analytics_data.get("total_count", 0)
     items_list = analytics_data.get("items", [])
-    tool_results_text = f"\n[Sales Analytics]: Company={effective_company}, Module={module_name}, Period={period_label}, TotalAmount={tot_amt}, TotalCount={tot_cnt}"
+    tool_results_text = f"\n[Financial Analytics]: Company={effective_company}, Module={module_name}, Period={period_label}, TotalAmount={tot_amt}, TotalCount={tot_cnt}"
 
     # Also fetch recent month data if total was requested, so user sees both All-Time and Month figures
     recent_period_amt = 0.0
@@ -211,7 +218,7 @@ async def handle_sales_analytics(
     if tot_cnt > 0 or tot_amt > 0:
         top_items_txt = ""
         for itm in items_list[:3]:
-            top_items_txt += f"  • `{itm.get('voucher_number', 'VCH')}` — **{itm.get('party_ledger', 'Customer')}**: ₹{itm.get('amount', 0):,.2f}\n"
+            top_items_txt += f"  • `{itm.get('voucher_number', 'VCH')}` — **{itm.get('party_ledger', 'Party')}**: ₹{itm.get('amount', 0):,.2f}\n"
 
         period_display = f"{from_date} to {to_date}" if from_date and to_date else "All-Time Lifetime Records (Synced from Tally Prime)"
 
@@ -220,7 +227,15 @@ async def handle_sales_analytics(
         month_extra_hing = f"• **Recent Period / Active Month**: **₹{recent_period_amt:,.2f}** ({recent_period_cnt} vouchers)\n" if (is_total_requested and recent_period_amt > 0) else ""
 
         if lang_code == "en-IN":
-            stat_label_en = "Total Payments Made" if module_name == "Payment" else f"Total {module_name} Value"
+            if module_name == "Payment":
+                stat_label_en = "Total Payments Made"
+            elif module_name == "Purchase":
+                stat_label_en = "Total Purchase Value"
+            elif module_name == "Debit Note":
+                stat_label_en = "Total Debit Note Value"
+            else:
+                stat_label_en = f"Total {module_name} Value"
+
             slot_missing_reply = (
                 f"📊 **{effective_company} — {period_label} {module_name} Report:**\n\n"
                 f"• **{stat_label_en}:** **₹{tot_amt:,.2f}**\n"
@@ -232,7 +247,15 @@ async def handle_sales_analytics(
                 slot_missing_reply += f"**Key Transactions:**\n{top_items_txt}\n"
             slot_missing_reply += "The interactive financial summary card has been loaded below with instant WhatsApp sharing!"
         elif lang_code == "hi-IN":
-            stat_label_hi = "कुल भुगतान राशि (Total Payments Made)" if module_name == "Payment" else "कुल राशि (Total Amount)"
+            if module_name == "Payment":
+                stat_label_hi = "कुल भुगतान राशि (Total Payments Made)"
+            elif module_name == "Purchase":
+                stat_label_hi = "कुल खरीद राशि (Total Purchase Value)"
+            elif module_name == "Debit Note":
+                stat_label_hi = "कुल डेबिट नोट राशि (Total Debit Notes)"
+            else:
+                stat_label_hi = f"कुल {module_name} राशि (Total Amount)"
+
             slot_missing_reply = (
                 f"📊 **{effective_company} — {period_label} {module_name} रिपोर्ट:**\n\n"
                 f"• **{stat_label_hi}:** **₹{tot_amt:,.2f}**\n"
@@ -244,7 +267,15 @@ async def handle_sales_analytics(
                 slot_missing_reply += f"**प्रमुख लेनदेन:**\n{top_items_txt}\n"
             slot_missing_reply += "नीचे लाइव समरी कार्ड लोड कर दिया गया है। आप इसे सीधे व्हाट्सएप पर भी शेयर कर सकते हैं!"
         else:
-            stat_label_hing = "Total Payments Made / Kul Bhugtan" if module_name == "Payment" else "Kul Bikri / Total Amount"
+            if module_name == "Payment":
+                stat_label_hing = "Total Payments Made / Kul Bhugtan"
+            elif module_name == "Purchase":
+                stat_label_hing = "Kul Kharid / Total Purchase"
+            elif module_name == "Debit Note":
+                stat_label_hing = "Total Debit Notes"
+            else:
+                stat_label_hing = f"Kul Bikri / Total {module_name} Amount"
+
             slot_missing_reply = (
                 f"📊 **{effective_company}** ka **{period_label}** ka **{module_name}** summary mil gaya hai:\n\n"
                 f"• **{stat_label_hing}:** **₹{tot_amt:,.2f}**\n"
@@ -447,7 +478,11 @@ async def handle_voucher_lookup(
             if cand_party.lower() not in effective_company.lower() and effective_company.lower() not in cand_party.lower():
                 party_search = cand_party
 
-    if any(w in last_msg_lower for w in ["payment", "payments", "bhugtan", "paid", "भुगतान", "पेमेंट"]):
+    if any(w in last_msg_lower for w in ["debit note", "debit notes", "debitnote", "purchase return", "डेबिट नोट"]):
+        v_type_filter = "Debit Note"
+    elif any(w in last_msg_lower for w in ["purchase", "purchases", "kharid", "buy", "खरीद", "परचेज"]):
+        v_type_filter = "Purchase"
+    elif any(w in last_msg_lower for w in ["payment", "payments", "bhugtan", "paid", "भुगतान", "पेमेंट"]):
         v_type_filter = "Payment"
     elif any(w in last_msg_lower for w in ["receipt", "रसीद"]):
         v_type_filter = "Receipt"
@@ -473,6 +508,46 @@ async def handle_voucher_lookup(
                     "amount": p_it.get("amount"),
                     "date": p_it.get("date"),
                     "voucher_type": "Payment",
+                    "narration": p_it.get("narration"),
+                    "items": [],
+                })
+    elif v_type_filter == "Purchase":
+        p_res = await connector_client.get_company_purchases(
+            company_name=effective_company,
+            company_id=effective_company_id,
+            q=party_search or v_num,
+            limit=5,
+            token=caller.get("connector_token"),
+        )
+        if p_res.get("items"):
+            for p_it in p_res["items"]:
+                vouchers.append({
+                    "id": p_it.get("id"),
+                    "voucher_number": p_it.get("voucher_number"),
+                    "party_ledger": p_it.get("party_ledger"),
+                    "amount": p_it.get("amount"),
+                    "date": p_it.get("date"),
+                    "voucher_type": "Purchase",
+                    "narration": p_it.get("narration"),
+                    "items": [],
+                })
+    elif v_type_filter == "Debit Note":
+        p_res = await connector_client.get_company_debit_notes(
+            company_name=effective_company,
+            company_id=effective_company_id,
+            q=party_search or v_num,
+            limit=5,
+            token=caller.get("connector_token"),
+        )
+        if p_res.get("items"):
+            for p_it in p_res["items"]:
+                vouchers.append({
+                    "id": p_it.get("id"),
+                    "voucher_number": p_it.get("voucher_number"),
+                    "party_ledger": p_it.get("party_ledger"),
+                    "amount": p_it.get("amount"),
+                    "date": p_it.get("date"),
+                    "voucher_type": "Debit Note",
                     "narration": p_it.get("narration"),
                     "items": [],
                 })

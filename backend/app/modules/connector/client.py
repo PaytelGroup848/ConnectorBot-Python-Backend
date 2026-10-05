@@ -680,6 +680,8 @@ class ConnectorClient:
         - GET /companies/{CompanyId}/receipts
         - GET /companies/{CompanyId}/sales-orders
         - GET /companies/{CompanyId}/payments
+        - GET /companies/{CompanyId}/purchases
+        - GET /companies/{CompanyId}/debit-notes
         Supports search query 'q', date range 'from' & 'to', pagination, and resilient local queue fallback.
         """
         comp_details = await self.resolve_company_details(company_name=company_name, company_id=company_id, token=token)
@@ -723,6 +725,11 @@ class ConnectorClient:
                 for k in [
                     endpoint_suffix.replace("-", ""),
                     endpoint_suffix,
+                    "purchases",
+                    "purchase",
+                    "debitNotes",
+                    "debitnotes",
+                    "debit-notes",
                     "payments",
                     "payment",
                     "sales",
@@ -827,6 +834,8 @@ class ConnectorClient:
                     "receipts": ("CREATE_RECEIPT", "Receipt"),
                     "sales-orders": ("CREATE_SALES_ORDER", "Sales Order"),
                     "payments": ("CREATE_PAYMENT", "Payment"),
+                    "purchases": ("CREATE_PURCHASE", "Purchase"),
+                    "debit-notes": ("CREATE_DEBIT_NOTE", "Debit Note"),
                 }
                 match_cmd, match_vtype = q_type_map.get(endpoint_suffix, ("CREATE_VOUCHER", "Sales"))
                 for q_cmd in reversed(command_queue_service.list_queued_commands()):
@@ -866,6 +875,8 @@ class ConnectorClient:
                 "receipts": "Receipt",
                 "sales-orders": "Sales Order",
                 "payments": "Payment",
+                "purchases": "Purchase",
+                "debit-notes": "Debit Note",
             }.get(endpoint_suffix, "Sales"),
             "company_name": effective_company,
             "company_id": resolved_cid,
@@ -891,6 +902,12 @@ class ConnectorClient:
 
     async def get_company_payments(self, **kwargs) -> Dict[str, Any]:
         return await self.get_company_sales_module("payments", **kwargs)
+
+    async def get_company_purchases(self, **kwargs) -> Dict[str, Any]:
+        return await self.get_company_sales_module("purchases", **kwargs)
+
+    async def get_company_debit_notes(self, **kwargs) -> Dict[str, Any]:
+        return await self.get_company_sales_module("debit-notes", **kwargs)
 
     # --------------------------------------------------------------------------
     # Official Reports Module (Day Book, Trial Balance, P&L, Balance Sheet, Voucher Lines)
