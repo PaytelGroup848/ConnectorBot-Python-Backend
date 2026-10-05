@@ -77,6 +77,20 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "get_company_details_command",
+            "description": "Fetches verified live Tally company profile, Company ID, Tally GUID, connection status, and synchronization metadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "Optional specific CtrlBooks Company ID"},
+                    "company_name": {"type": "string", "description": "Optional Tally company name"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_ledger",
             "description": "Searches for customer, vendor, or account ledgers in Tally (balance, GSTIN, phone).",
             "parameters": {
@@ -631,7 +645,17 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
     elif tool_name == "get_my_sync_errors":
         return {"errors": await connector_client.get_sync_errors(args.get("company_name"))}
     elif tool_name == "get_my_tally_connections":
-        return {"connections": await connector_client.get_tally_connections()}
+        token = args.get("connector_token") or args.get("token")
+        return {"connections": await connector_client.get_companies(token=token)}
+    elif tool_name == "get_company_details_command":
+        token = args.get("connector_token") or args.get("token")
+        cid = args.get("company_id")
+        cname = args.get("company_name")
+        if not cid and cname:
+            resolved = await connector_client.resolve_company_details(company_name=cname, token=token)
+            cid = resolved.get("company_id")
+        details = await connector_client.get_company_by_id(company_id=cid, token=token)
+        return {"company": details, "company_id": cid}
     elif tool_name == "search_ledger":
         return {
             "ledgers": await connector_client.search_ledgers(

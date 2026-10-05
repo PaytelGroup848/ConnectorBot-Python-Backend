@@ -15,6 +15,7 @@ from app.modules.chat.handlers.sales_handler import handle_sales_analytics, hand
 from app.modules.chat.handlers.cash_bank_handler import handle_cash_bank
 from app.modules.chat.handlers.party_handler import handle_parties
 from app.modules.chat.handlers.connector_status_handler import handle_connector_status_and_subscription
+from app.modules.chat.handlers.company_handler import handle_company_details
 
 logger = logging.getLogger("connector_ai.ai_gateway")
 
@@ -645,6 +646,25 @@ class AIGateway:
             if vl_reply:
                 slot_missing_reply = vl_reply
 
+        # 4f. Dynamic Tally Company Details & Profile Intent (GET /companies & GET /companies/:id)
+        handled_company, comp_tools, comp_text, comp_reply = await handle_company_details(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+            is_accounting_reports_intent=is_accounting_reports_intent,
+            is_sales_analytics_intent=is_sales_analytics_intent,
+            is_cash_bank_intent=is_cash_bank_intent,
+            is_parties_intent=is_parties_intent,
+        )
+        if handled_company:
+            executed_tools.extend(comp_tools)
+            tool_results_text += comp_text
+            if comp_reply:
+                slot_missing_reply = comp_reply
 
         elif any(w in last_msg_lower for w in ["sync", "fail", "error", "problem", "nahi ho raha", "सिंक"]):
             sync_data = await execute_tool("get_my_sync_status", {"company_name": active_company}, ctx)
@@ -677,6 +697,8 @@ class AIGateway:
                     "get_parties_command",
                     "get_connector_status_command",
                     "get_subscription_status_command",
+                    "get_company_details_command",
+                    "get_my_tally_connections",
                 )
                 for t in executed_tools
             )

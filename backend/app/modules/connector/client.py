@@ -136,8 +136,8 @@ class ConnectorClient:
             return res["data"].get("plans", [])
         return []
 
-    async def get_tally_connections(self, token: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Fetch linked Tally companies for the current authenticated user."""
+    async def get_companies(self, token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """1. Get Company: GET /companies - Fetches all linked Tally companies for user."""
         active_token = token or settings.CONNECTOR_API_TOKEN
         res = await self._request("GET", "/companies", token=active_token)
         if res.get("success") and res.get("data"):
@@ -151,11 +151,17 @@ class ConnectorClient:
                     "name": c_name,
                     "company_name": c_name,
                     "tallyCompanyName": c_name,
-                    "guid": str(c.get("tallyCompanyGuid") or ""),
-                    "status": "CONNECTED",
+                    "guid": str(c.get("tallyCompanyGuid") or c.get("guid") or ""),
+                    "tallyCompanyGuid": str(c.get("tallyCompanyGuid") or c.get("guid") or ""),
+                    "status": str(c.get("status") or "CONNECTED"),
+                    "linkedByConnectorId": str(c.get("linkedByConnectorId") or c.get("connectorId") or ""),
+                    "businessName": c.get("businessName") or c.get("displayName") or c_name,
+                    "city": c.get("city") or c.get("address") or "",
+                    "createdAt": c.get("createdAt") or "",
                 })
             if normalized:
                 return normalized
+
         # Dynamically discover any active registered companies from command queue or default
         try:
             from app.modules.connector.commands import command_queue_service
@@ -175,6 +181,55 @@ class ConnectorClient:
                 "status": "CONNECTED",
             }
         ]
+
+    async def get_tally_connections(self, token: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Backward-compatible alias for get_companies."""
+        return await self.get_companies(token=token)
+
+    async def get_company_by_id(self, company_id: str, token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """2. Get Company Details: GET /companies/:id - Fetches verified live company profile."""
+        if not company_id or str(company_id).strip() in ("", "None", "undefined"):
+            return None
+        clean_cid = str(company_id).strip()
+        active_token = token or settings.CONNECTOR_API_TOKEN
+
+        # 1. Primary: Direct GET /companies/:id endpoint
+        res = await self._request("GET", f"/companies/{clean_cid}", token=active_token)
+        if res.get("success") and res.get("data"):
+            raw = res["data"]
+            c = raw.get("company") if isinstance(raw, dict) and "company" in raw else raw
+            if isinstance(c, dict):
+                c_name = str(c.get("tallyCompanyName") or c.get("name") or c.get("companyName") or "Tally Company")
+                return {
+                    "id": str(c.get("id") or c.get("_id") or clean_cid),
+                    "name": c_name,
+                    "company_name": c_name,
+                    "tallyCompanyName": c_name,
+                    "guid": str(c.get("tallyCompanyGuid") or c.get("guid") or ""),
+                    "tallyCompanyGuid": str(c.get("tallyCompanyGuid") or c.get("guid") or ""),
+                    "status": str(c.get("status") or "CONNECTED"),
+                    "linkedByConnectorId": str(c.get("linkedByConnectorId") or c.get("connectorId") or ""),
+                    "businessName": c.get("businessName") or c.get("displayName") or c_name,
+                    "address": c.get("address") or "",
+                    "city": c.get("city") or "",
+                    "state": c.get("state") or "",
+                    "gstin": c.get("gstin") or "",
+                    "pan": c.get("pan") or "",
+                    "email": c.get("email") or "",
+                    "phone": c.get("phone") or "",
+                    "financialYearFrom": c.get("financialYearFrom") or c.get("startingFrom") or "",
+                    "booksBeginningFrom": c.get("booksBeginningFrom") or "",
+                    "createdAt": c.get("createdAt") or "",
+                    "lastSync": c.get("lastSync") or "",
+                }
+
+        # 2. Resilient Fallback: Match within GET /companies list
+        all_comps = await self.get_companies(token=token)
+        for comp in all_comps:
+            if comp.get("id") == clean_cid or clean_cid.lower() in comp.get("name", "").lower():
+                return comp
+
+        return None
 
     async def get_connection_status(
         self,
