@@ -86,12 +86,16 @@ class TicketService:
         return ticket
 
     async def list_user_tickets(
-        self, tenant_id: str, user_id: str, page: int = 1, page_size: int = 50, include_all_customers: bool = True
+        self, tenant_id: str, user_id: str, page: int = 1, page_size: int = 50, include_all_customers: bool = False
     ) -> List[SupportTicket]:
         offset = (page - 1) * page_size
         stmt = select(SupportTicket).options(selectinload(SupportTicket.messages))
+        # Strict Multi-Tenant Isolation: Regular customers only see their own tickets
         if not include_all_customers:
             stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
+        else:
+            # Internal support staff scoped to current tenant
+            stmt = stmt.where(SupportTicket.tenant_id == tenant_id)
         stmt = stmt.order_by(desc(SupportTicket.created_at)).offset(offset).limit(page_size)
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
@@ -103,8 +107,9 @@ class TicketService:
         ticket_id: str,
         status: str,
         engineer_reply: Optional[str] = None,
+        allow_support_override: bool = False,
     ) -> SupportTicket:
-        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id)
+        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id, allow_support_override=allow_support_override)
         ticket.status = status
         if status in ("RESOLVED", "CLOSED"):
             ticket.resolved_at = datetime.now(timezone.utc)
@@ -132,9 +137,9 @@ class TicketService:
         return ticket
 
     async def get_authorized_ticket(
-        self, tenant_id: str, user_id: str, ticket_id: str, allow_support_override: bool = True
+        self, tenant_id: str, user_id: str, ticket_id: str, allow_support_override: bool = False
     ) -> SupportTicket:
-        """Enforces ticket lookup and allows Support Operations Console to resolve customer tickets."""
+        """Enforces tenant isolation and prevents IDOR vulnerabilities."""
         stmt = (
             select(SupportTicket)
             .where(SupportTicket.id == ticket_id)
@@ -144,8 +149,9 @@ class TicketService:
         ticket = res.scalar_one_or_none()
         if not ticket:
             raise NotFoundException("Ticket not found")
-        if not allow_support_override and ticket.user_id != user_id:
-            raise ForbiddenException("You do not have permission to view this ticket")
+        if not allow_support_override:
+            if ticket.tenant_id != tenant_id or ticket.user_id != user_id:
+                raise ForbiddenException("You do not have permission to view this ticket")
         return ticket
 
     async def add_customer_message(

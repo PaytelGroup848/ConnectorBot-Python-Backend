@@ -64,7 +64,14 @@ async def list_tickets(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_list")
     service = TicketService(db)
-    tickets = await service.list_user_tickets(tenant_id=ctx.tenant_id, user_id=ctx.user_id, page=page, page_size=page_size)
+    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    tickets = await service.list_user_tickets(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        page=page,
+        page_size=page_size,
+        include_all_customers=is_internal_support,
+    )
     return {
         "success": True,
         "data": {
@@ -103,7 +110,13 @@ async def get_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_get")
     service = TicketService(db)
-    ticket = await service.get_authorized_ticket(tenant_id=ctx.tenant_id, user_id=ctx.user_id, ticket_id=ticket_id)
+    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    ticket = await service.get_authorized_ticket(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        ticket_id=ticket_id,
+        allow_support_override=is_internal_support,
+    )
     return {
         "success": True,
         "data": {
@@ -136,7 +149,13 @@ async def update_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_patch")
     service = TicketService(db)
-    ticket = await service.get_authorized_ticket(tenant_id=ctx.tenant_id, user_id=ctx.user_id, ticket_id=ticket_id)
+    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    ticket = await service.get_authorized_ticket(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        ticket_id=ticket_id,
+        allow_support_override=is_internal_support,
+    )
     if payload.description:
         ticket.description = payload.description
     await db.commit()
@@ -159,12 +178,14 @@ async def ticket_action(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_action")
     service = TicketService(db)
+    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
     ticket = await service.update_status_and_reply(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
         ticket_id=ticket_id,
         status=payload.status,
         engineer_reply=payload.reply,
+        allow_support_override=is_internal_support,
     )
     return {
         "success": True,
@@ -183,7 +204,13 @@ async def list_ticket_messages(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_msgs")
     service = TicketService(db)
-    ticket = await service.get_authorized_ticket(tenant_id=ctx.tenant_id, user_id=ctx.user_id, ticket_id=ticket_id)
+    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    ticket = await service.get_authorized_ticket(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+        ticket_id=ticket_id,
+        allow_support_override=is_internal_support,
+    )
     visible_msgs = [m for m in ticket.messages if not m.is_internal]
     return {
         "success": True,

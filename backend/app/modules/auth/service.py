@@ -50,19 +50,29 @@ class AuthService:
         user = res.scalars().first()
 
         if not user:
-            # 1. Resolve primary tenant if available, or create new
-            stmt_t = select(Tenant).order_by(Tenant.created_at).limit(1)
+            # 1. Resolve organization tenant dynamically based on connector_uid or user_email domain
+            # Guarantees multi-tenant isolation so separate customer accounts don't share tickets/conversations
+            conn_tenant_key = f"cnt_{connector_uid}" if connector_uid else f"cnt_{user_email.split('@')[1].replace('.', '_') if '@' in user_email else user_email}"
+            stmt_t = select(Tenant).where(Tenant.connector_tenant_id == conn_tenant_key).limit(1)
             res_t = await self.db.execute(stmt_t)
             tenant = res_t.scalars().first()
             if not tenant:
-                tenant = Tenant(
-                    name=tenant_name,
-                    status="ACTIVE",
-                    plan="Pro",
-                    connector_tenant_id=f"cnt_{user_email.split('@')[0]}",
-                )
-                self.db.add(tenant)
-                await self.db.flush()
+                domain_part = user_email.split('@')[1] if '@' in user_email else 'workspace'
+                if domain_part in ("ctrlbooks.com", "connector.cloudata.in"):
+                    # Primary/demo domain fallback
+                    stmt_pri = select(Tenant).order_by(Tenant.created_at).limit(1)
+                    res_pri = await self.db.execute(stmt_pri)
+                    tenant = res_pri.scalars().first()
+                if not tenant:
+                    org_name = name or (user_email.split('@')[0].capitalize() + " Organization")
+                    tenant = Tenant(
+                        name=org_name,
+                        status="ACTIVE",
+                        plan="Pro",
+                        connector_tenant_id=conn_tenant_key,
+                    )
+                    self.db.add(tenant)
+                    await self.db.flush()
 
             # 2. Create User
             is_guest = connector_token.startswith("guest_") or "guest" in user_email.lower()
@@ -71,7 +81,7 @@ class AuthService:
                 connector_user_id=f"usr_{connector_uid}" if connector_uid else f"usr_{user_email.split('@')[0]}",
                 email=user_email,
                 name=user_name,
-                role="GUEST" if is_guest else "ADMIN",
+                role="GUEST" if is_guest else "USER",
                 is_active=True,
             )
             self.db.add(user)
