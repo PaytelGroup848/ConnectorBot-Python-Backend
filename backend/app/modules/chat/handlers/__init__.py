@@ -7,6 +7,7 @@ from .sales_handler import handle_sales_analytics, handle_voucher_lookup
 from .cash_bank_handler import handle_cash_bank
 from .party_handler import handle_parties
 from .connector_status_handler import handle_connector_status_and_subscription
+from .company_handler import handle_company_details
 
 __all__ = [
     "handle_ticket_status_check",
@@ -18,4 +19,6 @@ __all__ = [
     "handle_cash_bank",
     "handle_parties",
     "handle_connector_status_and_subscription",
+    "handle_company_details",
 ]
+
