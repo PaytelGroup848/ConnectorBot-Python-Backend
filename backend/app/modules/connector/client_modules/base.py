@@ -123,7 +123,10 @@ class BaseConnectorClient:
                 res = await client.request(method=method, url=url, headers=headers, params=params, json=json_data)
                 if res.status_code in [200, 201]:
                     return res.json()
-            logger.warning(f"Connector API returned status {res.status_code} for {url}")
+            if res.status_code == 401:
+                logger.debug(f"Connector API returned status {res.status_code} for {url}")
+            else:
+                logger.warning(f"Connector API returned status {res.status_code} for {url}")
             return {"success": False, "statusCode": res.status_code, "data": None}
         except Exception as e:
             logger.error(f"Error calling Connector API {url}: {e}")

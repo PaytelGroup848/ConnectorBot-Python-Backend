@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.modules.connector.commands import command_queue_service
 from app.modules.connector.client import connector_client
-from app.middleware.tenant_context import TenantContext, get_current_tenant_context
+from app.middleware.tenant_context import TenantContext, get_current_tenant_context, get_widget_or_tenant_context
 
 router = APIRouter(prefix="/api/v1/connector", tags=["Tally Prime & CtrlBooks 2-Way Engine"])
 
@@ -176,10 +176,12 @@ async def get_my_subscription(
 @router.get("/companies", response_model=dict, summary="Get list of available Tally companies")
 async def list_companies(
     request: Request,
-    ctx: TenantContext = Depends(get_current_tenant_context),
+    ctx: TenantContext = Depends(get_widget_or_tenant_context),
 ):
     request_id = getattr(request.state, "request_id", "req_companies")
-    companies = await connector_client.get_tally_connections()
+    auth_header = request.headers.get("Authorization") or request.headers.get("X-Connector-Token")
+    user_token = auth_header.replace("Bearer ", "").strip() if auth_header else None
+    companies = await connector_client.get_companies(token=user_token)
     return {"success": True, "data": companies, "error": None, "request_id": request_id}
 
 
