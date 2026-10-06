@@ -59,6 +59,31 @@ def is_company_query(text: str) -> Tuple[bool, bool]:
         if re.search(rf"\b{excl}\b", lower):
             return False, False
 
+    # PRIORITY 1: Explicit Single / Current / Active Company Intent (Detail Mode)
+    CURRENT_COMPANY_PATTERNS = [
+        r"\bcurrent\s+(?:company|workspace|firm)\b",
+        r"\bactive\s+(?:company|workspace|firm)\b",
+        r"\bselected\s+(?:company|workspace|firm)\b",
+        r"\bopen\s+(?:company|workspace|firm)\b",
+        r"\bwhich\s+company\s+is\s+(?:active|selected|current|open)\b",
+        r"\b(?:what\s+is\s+)?(?:my\s+)?(?:current|active|selected)\s+company(?:\s+name)?\b",
+        r"\bcompany\s+name\b",
+        r"\bcompany\s+ka\s+naam\b",
+        r"\bcompany\s+ki\s+detail\b",
+        r"\bkaun\s*si\s+company\s+(?:active|selected|open|chal\s+rahi|hai)\b",
+        r"\bkonsi\s+company\s+(?:active|selected|open|chal\s+rahi|hai)\b",
+        r"\bmeri\s+company\s+ka\s+naam\b",
+        r"\bmeri\s+active\s+company\b",
+        r"\bab\s+kaun\s*si\s+company\b",
+    ]
+    for pat in CURRENT_COMPANY_PATTERNS:
+        if re.search(pat, lower):
+            return True, False
+
+    for kw in COMPANY_DETAIL_KEYWORDS:
+        if kw in lower:
+            return True, False
+
     # Check for List mode keywords
     for kw in COMPANY_LIST_KEYWORDS:
         if kw in lower:
@@ -68,7 +93,7 @@ def is_company_query(text: str) -> Tuple[bool, bool]:
     # Matches: "how many company are existing", "how many companies do i have", "total companies", "count of companies", etc.
     if re.search(r"\b(how\s+many|count\s+of|number\s+of|total|existing|available|all|all\s+my|which)\s+([a-z0-9_\-\s]{0,25})compan(y|ies)\b", lower):
         return True, True
-    if re.search(r"\bcompan(y|ies)\s+(count|total|list|existing|available|names?)\b", lower):
+    if re.search(r"\bcompan(y|ies)\s+(count|total|list|existing|available)\b", lower):
         return True, True
     if re.search(r"\b(kitn[ei]|kitna|saari|sari)\s+([a-z0-9_\-\s]{0,25})compan(y|ies|i)\b", lower):
         return True, True
@@ -246,10 +271,32 @@ async def handle_company_details(
         f"Status=CONNECTED, LastSync={last_sync_formatted}, Port={tally_port}"
     )
 
+    # Check if query was specifically asking for the company name / active company
+    is_name_focused = any(
+        w in last_msg_lower
+        for w in [
+            "current company name",
+            "company name",
+            "company ka naam",
+            "konsi company",
+            "kaun si company",
+            "which company",
+            "current company",
+            "active company",
+            "current workspace",
+            "active workspace",
+        ]
+    )
+
     # Localized synthesis:
     if lang_code == "en-IN":
+        heading = (
+            f"🏢 Your current active company is **{c_name}**."
+            if is_name_focused
+            else f"🏢 **Company Profile & Verification Details:**"
+        )
         reply = (
-            f"🏢 **Company Profile & Verification Details:**\n\n"
+            f"{heading}\n\n"
             f"• **Company Name:** **{c_name}**\n"
             f"• **Company ID:** `{c_id}`\n"
             f"• **Tally Prime GUID:** `{c_guid}`\n"
@@ -272,8 +319,13 @@ async def handle_company_details(
         )
     else:
         # Hinglish default (Smart Indian CA Colleague style)
+        heading = (
+            f"🏢 {friendly_hi}, aapka current active workspace **{c_name}** hai:"
+            if is_name_focused
+            else f"🏢 **{friendly_hi}, aapki active company ki verified details niche di gayi hain:**"
+        )
         reply = (
-            f"🏢 **{friendly_hi}, aapki active company ki verified details niche di gayi hain:**\n\n"
+            f"{heading}\n\n"
             f"• **Company Name:** **{c_name}**\n"
             f"• **Company ID:** `{c_id}`\n"
             f"• **Tally GUID:** `{c_guid}`\n"
