@@ -292,3 +292,59 @@ async def get_dashboard_metrics(company_name: Optional[str] = None, request: Req
     return {"success": True, "data": metrics, "error": None, "request_id": request_id}
 
 
+@router.get("/companies/{company_id}/commands", response_model=dict, summary="Get My Entry command queue with filtering by type, status, and voucherType")
+async def get_my_entry_commands(
+    company_id: str,
+    request: Request,
+    type: Optional[str] = None,
+    voucherType: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20,
+    q: Optional[str] = None,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_entries")
+    res = await connector_client.get_my_entries(
+        company_id=company_id,
+        command_type=type,
+        voucher_type=voucherType,
+        status=status,
+        page=page,
+        limit=limit,
+        q=q,
+    )
+    return {"success": res.get("success", True), "data": res, "error": None, "request_id": request_id}
+
+
+@router.delete("/companies/{company_id}/commands/{command_id}", response_model=dict, summary="Delete a specific entry from My Entry command queue")
+async def delete_my_entry_command(
+    company_id: str,
+    command_id: str,
+    request: Request,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_del_entry")
+    res = await connector_client.delete_my_entry(
+        command_id=command_id,
+        company_id=company_id,
+    )
+    return {"success": res.get("success", True), "data": res, "error": None, "request_id": request_id}
+
+
+class GstinVerifyRequest(BaseModel):
+    gstin: str = Field(..., description="15-character GSTIN number to verify")
+
+
+@router.post("/gstin/verify", response_model=dict, summary="Verify GSTIN via official Tally Solutions API")
+async def verify_gstin(
+    payload: GstinVerifyRequest,
+    request: Request,
+    ctx: TenantContext = Depends(get_current_tenant_context),
+):
+    request_id = getattr(request.state, "request_id", "req_gstin_verify")
+    res = await connector_client.search_tally_gst(gstin=payload.gstin)
+    return {"success": res.get("success", True), "data": res, "error": None if res.get("is_valid") else res.get("message"), "request_id": request_id}
+
+
+

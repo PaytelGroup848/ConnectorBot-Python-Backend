@@ -658,4 +658,52 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_my_entries_command",
+            "description": "Retrieves user's created entries from CtrlBooks My Entry queue. Filters by status (PENDING, SENT, DONE, FAILED), command type (CREATE_VOUCHER, CREATE_PARTY, CREATE_STOCK_ITEM), voucherType (Sales, Quotation, Receipt, Payment, Sales Order, Purchase, Journal, Contra, Purchase Order, Credit Note, Physical Stock, Receipt Note, Delivery Note), or keyword search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Optional company name"},
+                    "command_type": {"type": "string", "description": "CREATE_VOUCHER, CREATE_PARTY, or CREATE_STOCK_ITEM", "enum": ["CREATE_VOUCHER", "CREATE_PARTY", "CREATE_STOCK_ITEM"]},
+                    "voucher_type": {"type": "string", "description": "Specific voucher type e.g. Quotation, Sales, Receipt, Payment, Sales Order, Purchase, Journal, Contra, Purchase Order, Credit Note, Physical Stock, Receipt Note, Delivery Note"},
+                    "status": {"type": "string", "description": "Status filter e.g. PENDING, SENT, PENDING,SENT, DONE, FAILED"},
+                    "q": {"type": "string", "description": "Search keyword by party name or voucher number"},
+                    "page": {"type": "number", "description": "Page number (default: 1)"},
+                    "limit": {"type": "number", "description": "Number of entries to return (default: 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_my_entry_command",
+            "description": "Deletes or cancels a specific queued entry/command from CtrlBooks by Command ID (DELETE /companies/{CompanyId}/commands/{CommandId}).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command_id": {"type": "string", "description": "The exact Command ID to delete"},
+                    "company_name": {"type": "string", "description": "Optional company name"},
+                },
+                "required": ["command_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_gstin_command",
+            "description": "Verifies an Indian GST Number (GSTIN) against official Tally Solutions GST API. Returns verified Legal Name, Trade Name, Registration Type, Full Address, State, and Active Status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gstin": {"type": "string", "description": "15-character GST Number to verify e.g. 24AAACC1206D1ZM"},
+                },
+                "required": ["gstin"],
+            },
+        },
+    },
 ]

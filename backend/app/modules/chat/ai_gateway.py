@@ -33,6 +33,7 @@ from app.modules.chat.handlers import (
     handle_parties,
     handle_connector_status_and_subscription,
     handle_company_details,
+    handle_my_entry_and_gst,
 )
 
 # Multilingual Linguistic Parsing, Normalization & Fallback Utilities (Re-exported for backward compatibility)
@@ -306,6 +307,22 @@ class AIGateway:
             tool_results_text += comp_text
             if comp_reply:
                 slot_missing_reply = comp_reply
+
+        # 4g. Dynamic My Entry Command Queue & Tally Solutions GSTIN Verification
+        handled_entry, entry_tools, entry_text, entry_reply = await handle_my_entry_and_gst(
+            last_user_message=last_user_message,
+            last_msg_lower=last_msg_lower,
+            caller=caller,
+            active_company=active_company,
+            lang_code=lang_code,
+            is_ticket_intent=is_ticket_intent,
+            is_voucher_intent=is_voucher_intent,
+        )
+        if handled_entry:
+            executed_tools.extend(entry_tools)
+            tool_results_text += entry_text
+            if entry_reply:
+                slot_missing_reply = entry_reply
 
         elif any(w in last_msg_lower for w in ["sync", "fail", "error", "problem", "nahi ho raha", "सिंक"]):
             sync_data = await execute_tool("get_my_sync_status", {"company_name": active_company}, ctx)

@@ -18,6 +18,7 @@ from app.modules.connector.client_modules.financial import FinancialClientMixin
 from app.modules.connector.client_modules.reports import ReportsClientMixin
 from app.modules.connector.client_modules.parties import PartiesClientMixin
 from app.modules.connector.client_modules.telemetry import TelemetryClientMixin
+from app.modules.connector.client_modules.entries import EntriesClientMixin
 
 logger = logging.getLogger("connector_ai.connector_client")
 
@@ -30,6 +31,7 @@ class ConnectorClient(
     ReportsClientMixin,
     PartiesClientMixin,
     TelemetryClientMixin,
+    EntriesClientMixin,
 ):
     """Resilient client communicating with Connector / CtrlBooks APIs with dynamic Tally port auto-discovery."""
     pass

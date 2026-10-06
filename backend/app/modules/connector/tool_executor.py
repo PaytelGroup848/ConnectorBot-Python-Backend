@@ -526,5 +526,48 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], ctx: TenantContext)
             token=token,
         )
 
+    # 22. My Entry & Command Audit Queue
+    elif tool_name == "get_my_entries_command":
+        comp_name = args.get("company_name")
+        comp_id = args.get("company_id")
+        c_type = args.get("command_type")
+        v_type = args.get("voucher_type")
+        st = args.get("status")
+        q = args.get("q")
+        page = int(args.get("page", 1))
+        limit = int(args.get("limit", 20))
+        token = args.get("connector_token")
+
+        return await connector_client.get_my_entries(
+            company_name=comp_name,
+            company_id=comp_id,
+            command_type=c_type,
+            voucher_type=v_type,
+            status=st,
+            page=page,
+            limit=limit,
+            q=q,
+            token=token,
+        )
+
+    # 23. Delete My Entry / Command
+    elif tool_name == "delete_my_entry_command":
+        cmd_id = args.get("command_id")
+        comp_name = args.get("company_name")
+        comp_id = args.get("company_id")
+        token = args.get("connector_token")
+
+        return await connector_client.delete_my_entry(
+            command_id=cmd_id,
+            company_name=comp_name,
+            company_id=comp_id,
+            token=token,
+        )
+
+    # 24. Official Tally Solutions GSTIN Lookup
+    elif tool_name == "verify_gstin_command":
+        gstin = args.get("gstin", "")
+        return await connector_client.search_tally_gst(gstin=gstin)
+
     else:
         return {"error": f"Tool '{tool_name}' is not recognized or permitted."}
