@@ -183,7 +183,7 @@ async def handle_ticket_creation(
             subject=spec["subject"],
             description=full_issue_desc,
             priority=spec["priority"],
-            conversation_id=None,
+            conversation_id=conversation_id,
             ai_summary=spec["ai_summary"],
         )
 

@@ -102,25 +102,26 @@ class TicketService:
         stmt = select(SupportTicket).options(selectinload(SupportTicket.messages))
         # Strict Multi-Tenant Isolation: Regular customers only see their own tickets
         if not include_all_customers:
-            from sqlalchemy import cast, String
+            from sqlalchemy import cast, String, or_
             from app.middleware.tenant_context import get_or_resolve_default_tenant_and_user
             _, def_uid = await get_or_resolve_default_tenant_and_user(self.db)
 
+            filters = []
+            if conversation_id and conversation_id.strip():
+                filters.append(SupportTicket.conversation_id == conversation_id.strip())
             if user_email and user_email.strip():
                 clean_email = user_email.strip().lower()
-                stmt = stmt.where(
-                    cast(SupportTicket.ai_summary["customer_email"], String).ilike(f"%{clean_email}%")
-                )
-            elif conversation_id and conversation_id.strip():
-                # Allow customers to see tickets created in their active conversation session
-                stmt = stmt.where(SupportTicket.conversation_id == conversation_id.strip())
+                filters.append(cast(SupportTicket.ai_summary["customer_email"], String).ilike(f"%{clean_email}%"))
+
+            if filters:
+                stmt = stmt.where(or_(*filters))
             elif user_id and user_id != def_uid:
                 stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
             else:
                 # GUEST or fallback default identity with no verified email must never see arbitrary server tickets
                 return []
 
-            if company_name and company_name.strip():
+            if company_name and company_name.strip() and not filters:
                 clean_comp = company_name.strip().lower()
                 stmt = stmt.where(
                     cast(SupportTicket.ai_summary["company"], String).ilike(f"%{clean_comp}%")

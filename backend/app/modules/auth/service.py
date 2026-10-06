@@ -103,11 +103,12 @@ class AuthService:
                 await self.db.commit()
                 await self.db.refresh(user)
 
-        # Generate AI access token
+        # Generate AI access token (Widget-exchanged session role is strictly USER to prevent privilege escalation)
+        effective_role = "USER"
         access_token = create_access_token(
             subject=user.id,
             tenant_id=user.tenant_id,
-            role=user.role,
+            role=effective_role,
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         )
 
@@ -117,7 +118,7 @@ class AuthService:
             "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user_id": user.id,
             "tenant_id": user.tenant_id,
-            "role": user.role,
+            "role": effective_role,
         }
 
     async def refresh_session(self, token: str) -> dict:
