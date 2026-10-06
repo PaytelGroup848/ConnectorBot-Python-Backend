@@ -121,7 +121,9 @@ def create_app() -> FastAPI:
                 widget_dist_path,
                 media_type="application/javascript",
                 headers={
-                    "Cache-Control": "public, max-age=300",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
                     "Access-Control-Allow-Origin": "*",
                 },
             )

@@ -60,6 +60,7 @@ async def list_tickets(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     user_email: Optional[str] = Query(None, description="Customer email filter for widget"),
+    company_name: Optional[str] = Query(None, description="Company filter for widget"),
     ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
@@ -67,14 +68,30 @@ async def list_tickets(
     service = TicketService(db)
     is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
     is_superadmin = ctx.role == "SUPERADMIN"
+
+    # Strict Privacy Guard: Unauthenticated guests with no verified email see 0 tickets
+    if not is_internal_support and ctx.role == "GUEST" and not (user_email and user_email.strip()):
+        return {
+            "success": True,
+            "data": {
+                "page": page,
+                "page_size": page_size,
+                "items": [],
+            },
+            "error": None,
+            "request_id": request_id,
+        }
+
     tickets = await service.list_user_tickets(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
+        role=ctx.role,
         page=page,
         page_size=page_size,
         include_all_customers=is_internal_support,
         all_tenants=is_superadmin,
         user_email=user_email,
+        company_name=company_name,
     )
     return {
         "success": True,
