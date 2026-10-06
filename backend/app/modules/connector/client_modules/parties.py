@@ -247,8 +247,8 @@ class PartiesClientMixin:
         resolved_cid = comp_details["company_id"]
         effective_company = comp_details["company_name"]
 
-        # Note: API server safely caps limit at 100 per page
-        effective_limit = min(int(limit), 100) if limit else 50
+        # Support enterprise pagination up to 500 per page
+        effective_limit = min(int(limit), 500) if limit else 50
         params: Dict[str, Any] = {"page": page, "limit": effective_limit}
         if q:
             params["q"] = q.strip()
