@@ -61,16 +61,17 @@ async def list_tickets(
     page_size: int = Query(50, ge=1, le=100),
     user_email: Optional[str] = Query(None, description="Customer email filter for widget"),
     company_name: Optional[str] = Query(None, description="Company filter for widget"),
+    conversation_id: Optional[str] = Query(None, description="Customer conversation session filter"),
     ctx: TenantContext = Depends(get_widget_or_tenant_context),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_list")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
-    is_superadmin = ctx.role == "SUPERADMIN"
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
+    is_superadmin = ctx.role in ("SUPERADMIN", "ADMIN")
 
-    # Strict Privacy Guard: Unauthenticated guests with no verified email see 0 tickets
-    if not is_internal_support and ctx.role == "GUEST" and not (user_email and user_email.strip()):
+    # Strict Privacy Guard: Unauthenticated guests with no verified email and no conversation_id see 0 tickets
+    if not is_internal_support and ctx.role == "GUEST" and not (user_email and user_email.strip()) and not (conversation_id and conversation_id.strip()):
         return {
             "success": True,
             "data": {
@@ -92,6 +93,7 @@ async def list_tickets(
         all_tenants=is_superadmin,
         user_email=user_email,
         company_name=company_name,
+        conversation_id=conversation_id,
     )
     return {
         "success": True,
@@ -131,7 +133,7 @@ async def get_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_get")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.get_authorized_ticket(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -170,7 +172,7 @@ async def update_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_patch")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.get_authorized_ticket(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -199,7 +201,7 @@ async def ticket_action(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_action")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.update_status_and_reply(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -225,7 +227,7 @@ async def list_ticket_messages(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_msgs")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.get_authorized_ticket(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -283,7 +285,7 @@ async def close_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_close")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.close_ticket(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -307,7 +309,7 @@ async def reopen_ticket(
 ):
     request_id = getattr(request.state, "request_id", "req_ticket_reopen")
     service = TicketService(db)
-    is_internal_support = ctx.role in ("SUPERADMIN", "SUPPORT")
+    is_internal_support = ctx.role in ("SUPERADMIN", "ADMIN", "SUPPORT")
     ticket = await service.reopen_ticket(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,

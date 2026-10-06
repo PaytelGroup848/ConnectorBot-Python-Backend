@@ -96,6 +96,7 @@ class TicketService:
         all_tenants: bool = False,
         user_email: Optional[str] = None,
         company_name: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> List[SupportTicket]:
         offset = (page - 1) * page_size
         stmt = select(SupportTicket).options(selectinload(SupportTicket.messages))
@@ -110,6 +111,9 @@ class TicketService:
                 stmt = stmt.where(
                     cast(SupportTicket.ai_summary["customer_email"], String).ilike(f"%{clean_email}%")
                 )
+            elif conversation_id and conversation_id.strip():
+                # Allow customers to see tickets created in their active conversation session
+                stmt = stmt.where(SupportTicket.conversation_id == conversation_id.strip())
             elif user_id and user_id != def_uid:
                 stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
             else:
