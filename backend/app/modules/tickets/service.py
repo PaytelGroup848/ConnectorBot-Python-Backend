@@ -86,14 +86,20 @@ class TicketService:
         return ticket
 
     async def list_user_tickets(
-        self, tenant_id: str, user_id: str, page: int = 1, page_size: int = 50, include_all_customers: bool = False
+        self,
+        tenant_id: str,
+        user_id: str,
+        page: int = 1,
+        page_size: int = 50,
+        include_all_customers: bool = False,
+        all_tenants: bool = False,
     ) -> List[SupportTicket]:
         offset = (page - 1) * page_size
         stmt = select(SupportTicket).options(selectinload(SupportTicket.messages))
         # Strict Multi-Tenant Isolation: Regular customers only see their own tickets
         if not include_all_customers:
             stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
-        else:
+        elif not all_tenants:
             # Internal support staff scoped to current tenant
             stmt = stmt.where(SupportTicket.tenant_id == tenant_id)
         stmt = stmt.order_by(desc(SupportTicket.created_at)).offset(offset).limit(page_size)
@@ -171,13 +177,15 @@ class TicketService:
         await self.db.refresh(msg)
         return msg
 
-    async def close_ticket(self, tenant_id: str, user_id: str, ticket_id: str) -> SupportTicket:
-        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id)
+    async def close_ticket(
+        self, tenant_id: str, user_id: str, ticket_id: str, allow_support_override: bool = False
+    ) -> SupportTicket:
+        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id, allow_support_override=allow_support_override)
         ticket.status = "CLOSED"
         ticket.closed_at = datetime.now(timezone.utc)
         event = TicketEvent(
             ticket_id=ticket.id,
-            event_type="CLOSED_BY_USER",
+            event_type="CLOSED_BY_ADMIN" if allow_support_override else "CLOSED_BY_USER",
             actor_id=user_id,
         )
         self.db.add(event)
@@ -185,12 +193,14 @@ class TicketService:
         await self.db.refresh(ticket)
         return ticket
 
-    async def reopen_ticket(self, tenant_id: str, user_id: str, ticket_id: str) -> SupportTicket:
-        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id)
+    async def reopen_ticket(
+        self, tenant_id: str, user_id: str, ticket_id: str, allow_support_override: bool = False
+    ) -> SupportTicket:
+        ticket = await self.get_authorized_ticket(tenant_id, user_id, ticket_id, allow_support_override=allow_support_override)
         ticket.status = "REOPENED"
         event = TicketEvent(
             ticket_id=ticket.id,
-            event_type="REOPENED_BY_USER",
+            event_type="REOPENED_BY_ADMIN" if allow_support_override else "REOPENED_BY_USER",
             actor_id=user_id,
         )
         self.db.add(event)
