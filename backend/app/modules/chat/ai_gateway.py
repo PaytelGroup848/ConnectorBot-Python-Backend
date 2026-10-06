@@ -95,6 +95,29 @@ class AIGateway:
         )
         today_date = datetime.date.today().isoformat()
         caller = _resolve_caller_identity(user_meta, ctx, active_company)
+
+        # Smart Company Disambiguation: Check if user message explicitly mentions a connected company
+        if active_company.lower() in ("ctrlbooks", "default", "your company", "connected company", ""):
+            try:
+                active_token = caller.get("connector_token") or settings.CONNECTOR_API_TOKEN
+                if active_token:
+                    comp_res = await connector_client._request("GET", "/companies", token=active_token)
+                    if comp_res.get("success") and comp_res.get("data"):
+                        c_list = comp_res["data"] if isinstance(comp_res["data"], list) else comp_res["data"].get("companies", [])
+                        for c in c_list:
+                            cname = str(c.get("tallyCompanyName") or c.get("company_name") or c.get("name") or "").strip()
+                            if not cname or len(cname) < 3:
+                                continue
+                            c_words = [w for w in re.split(r"[\s-_]+", cname.lower()) if len(w) >= 4 and w not in ("company", "firm", "limited", "traders", "agency")]
+                            clean_cname = re.sub(r"\b(company|firm|ltd|pvt|enterprise|trader|traders|agency)\b", "", cname.lower()).strip()
+                            if (cname.lower() in last_msg_lower) or (clean_cname and len(clean_cname) >= 3 and clean_cname in last_msg_lower) or any(w in last_msg_lower for w in c_words):
+                                active_company = cname
+                                caller["company_id"] = str(c.get("id") or c.get("_id") or caller.get("company_id") or "")
+                                caller["company_name"] = cname
+                                break
+            except Exception:
+                pass
+
         sample_party = _discover_sample_party(active_company)
 
         executed_tools: List[Dict[str, Any]] = []
