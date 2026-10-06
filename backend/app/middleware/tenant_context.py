@@ -114,7 +114,7 @@ async def get_optional_tenant_context(
                     def_tid, def_uid = await get_or_resolve_default_tenant_and_user(db)
                     user_id = def_uid
                     tenant_id = def_tid
-                role = "ADMIN"
+                role = getattr(db_user, "role", "USER") if db_user else "USER"
                 context = TenantContext(user_id=user_id, tenant_id=tenant_id, role=role)
                 request.state.tenant_context = context
                 request.state.user_id = user_id
@@ -132,7 +132,7 @@ async def get_optional_tenant_context(
         context = TenantContext(
             user_id=def_uid,
             tenant_id=def_tid,
-            role="ADMIN",
+            role="USER",
         )
         request.state.tenant_context = context
         request.state.user_id = context.user_id
@@ -157,7 +157,7 @@ async def get_current_tenant_context(
             return TenantContext(
                 user_id=def_uid,
                 tenant_id=def_tid,
-                role="ADMIN",
+                role="USER",
             )
         raise UnauthorizedException("Valid authentication token required")
     return context

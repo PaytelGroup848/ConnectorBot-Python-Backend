@@ -93,12 +93,21 @@ class TicketService:
         page_size: int = 50,
         include_all_customers: bool = False,
         all_tenants: bool = False,
+        user_email: Optional[str] = None,
     ) -> List[SupportTicket]:
         offset = (page - 1) * page_size
         stmt = select(SupportTicket).options(selectinload(SupportTicket.messages))
         # Strict Multi-Tenant Isolation: Regular customers only see their own tickets
         if not include_all_customers:
-            stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
+            if user_email and user_email.strip():
+                clean_email = user_email.strip().lower()
+                from sqlalchemy import cast, String
+                stmt = stmt.where(
+                    SupportTicket.tenant_id == tenant_id,
+                    cast(SupportTicket.ai_summary["customer_email"], String).ilike(f"%{clean_email}%"),
+                )
+            else:
+                stmt = stmt.where(SupportTicket.tenant_id == tenant_id, SupportTicket.user_id == user_id)
         elif not all_tenants:
             # Internal support staff scoped to current tenant
             stmt = stmt.where(SupportTicket.tenant_id == tenant_id)

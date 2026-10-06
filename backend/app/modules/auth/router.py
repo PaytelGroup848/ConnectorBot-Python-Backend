@@ -56,7 +56,7 @@ async def admin_login(
     token = create_access_token(
         subject=user_id,
         tenant_id=tenant_id,
-        role="ADMIN",
+        role="SUPERADMIN",
     )
 
     return {
@@ -67,7 +67,7 @@ async def admin_login(
                 "id": user_id,
                 "email": settings.ADMIN_EMAIL,
                 "name": "CtrlBooks System Administrator",
-                "role": "ADMIN",
+                "role": "SUPERADMIN",
                 "tenant_id": tenant_id,
             },
         },
